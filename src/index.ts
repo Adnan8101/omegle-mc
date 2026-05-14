@@ -9,6 +9,8 @@ import serverCommand from "./commands/server";
 import statusCommand from "./commands/status";
 import bridgeCommand from "./commands/bridge";
 import utilityCommand from "./commands/utility";
+import whitelistCommand from "./commands/whitelist";
+import verifyCommand from "./commands/verify";
 import { registerReadyEvent } from "./events/ready";
 import { registerInteractionCreateEvent } from "./events/interactionCreate";
 import { registerMessageCreateEvent } from "./events/messageCreate";
@@ -32,7 +34,9 @@ const commandList: AppCommand[] = [
   serverCommand,
   statusCommand,
   bridgeCommand,
-  utilityCommand
+  utilityCommand,
+  whitelistCommand,
+  verifyCommand
 ];
 
 const commands = new Map<string, AppCommand>();

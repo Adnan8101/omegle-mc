@@ -4,6 +4,7 @@ import {
   Client,
   Message,
   SlashCommandBuilder,
+  SlashCommandOptionsOnlyBuilder,
   SlashCommandSubcommandsOnlyBuilder
 } from "discord.js";
 import { MinecraftBridge } from "../minecraft/bridge";
@@ -24,7 +25,7 @@ export type AppCommand = {
   name: string;
   description: string;
   aliases?: string[];
-  slash?: SlashCommandBuilder | SlashCommandSubcommandsOnlyBuilder;
+  slash?: SlashCommandBuilder | SlashCommandSubcommandsOnlyBuilder | SlashCommandOptionsOnlyBuilder;
   execute: (ctx: CommandContext) => Promise<void>;
 };
 

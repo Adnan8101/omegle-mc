@@ -19,3 +19,54 @@ model Server {
   bridgeEnabled   Boolean  @default(false)
   createdAt       DateTime @default(now())
 }
+
+enum WhitelistEdition {
+  JAVA
+  BEDROCK
+}
+
+enum WhitelistRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model WhitelistConfig {
+  id               String             @id @default(cuid())
+  guildId          String             @unique
+  requestChannelId String
+  staffChannelId   String
+  requestMessageId String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  modRoles         WhitelistModRole[]
+  requests         WhitelistRequest[]
+}
+
+model WhitelistModRole {
+  id        String          @id @default(cuid())
+  guildId   String
+  roleId    String
+  createdAt DateTime        @default(now())
+  config    WhitelistConfig @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+
+  @@unique([guildId, roleId])
+  @@index([guildId])
+}
+
+model WhitelistRequest {
+  id              String                 @id @default(cuid())
+  guildId         String
+  userId          String
+  username        String
+  edition         WhitelistEdition
+  status          WhitelistRequestStatus @default(PENDING)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewMessageId String?
+  createdAt       DateTime               @default(now())
+  config          WhitelistConfig        @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+
+  @@index([guildId, status])
+  @@index([guildId, userId, status])
+}

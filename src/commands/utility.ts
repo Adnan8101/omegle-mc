@@ -55,8 +55,10 @@ export default {
         "- /server <add|edit|delete|list>",
         "- /status <enable|disable|show>",
         "- /bridge <enable|disable>",
+        "- /whitelist <setup|mod-role>",
+        "- /verify <user>",
         "- /utility <ping|help|uptime>",
-        `Prefix examples: ${env.PREFIX}server list, ${env.PREFIX}status show <name>`
+        `Prefix examples: ${env.PREFIX}server list, ${env.PREFIX}whitelist setup, ${env.PREFIX}verify @user`
       ].join("\n");
 
       await respond(ctx, {
