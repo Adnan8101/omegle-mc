@@ -1,0 +1,21 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Server {
+  id              String   @id @default(cuid())
+  guildId         String
+  name            String
+  host            String
+  port            Int
+  statusChannelId String?
+  bridgeChannelId String?
+  statusEnabled   Boolean  @default(false)
+  bridgeEnabled   Boolean  @default(false)
+  createdAt       DateTime @default(now())
+}
