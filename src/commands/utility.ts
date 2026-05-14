@@ -6,8 +6,13 @@ import { formatDuration } from "../utils/helpers";
 
 async function respond(ctx: CommandContext, payload: { content?: string; embeds?: any[] }) {
   if (ctx.interaction) {
-    if (ctx.interaction.replied || ctx.interaction.deferred) {
+    if (ctx.interaction.replied) {
       await ctx.interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (ctx.interaction.deferred) {
+      await ctx.interaction.editReply(payload);
       return;
     }
     await ctx.interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
@@ -57,8 +62,9 @@ export default {
         "- /bridge <enable|disable>",
         "- /whitelist <setup|mod-role>",
         "- /verify <user>",
+        "- /reject <user> <reason>",
         "- /utility <ping|help|uptime>",
-        `Prefix examples: ${env.PREFIX}server list, ${env.PREFIX}whitelist setup, ${env.PREFIX}verify @user`
+        `Prefix examples: ${env.PREFIX}whitelist setup, ${env.PREFIX}verify @user, ${env.PREFIX}reject @user duplicate account`
       ].join("\n");
 
       await respond(ctx, {

@@ -11,6 +11,7 @@ import bridgeCommand from "./commands/bridge";
 import utilityCommand from "./commands/utility";
 import whitelistCommand from "./commands/whitelist";
 import verifyCommand from "./commands/verify";
+import rejectCommand from "./commands/reject";
 import { registerReadyEvent } from "./events/ready";
 import { registerInteractionCreateEvent } from "./events/interactionCreate";
 import { registerMessageCreateEvent } from "./events/messageCreate";
@@ -36,7 +37,8 @@ const commandList: AppCommand[] = [
   bridgeCommand,
   utilityCommand,
   whitelistCommand,
-  verifyCommand
+  verifyCommand,
+  rejectCommand
 ];
 
 const commands = new Map<string, AppCommand>();

@@ -14,11 +14,14 @@ import {
   hasWhitelistAccess,
   isValidMinecraftUsername,
   pendingDmEmbed,
+  rejectRequestById,
   requestEmbed,
-  staffApproveButtons,
+  staffReviewButtons,
   WHITELIST_APPROVE_PREFIX,
   WHITELIST_BUTTON_BEDROCK,
   WHITELIST_BUTTON_JAVA,
+  WHITELIST_REJECT_MODAL_PREFIX,
+  WHITELIST_REJECT_PREFIX,
   WHITELIST_MODAL_PREFIX
 } from "../utils/whitelist";
 
@@ -71,42 +74,118 @@ export function registerInteractionCreateEvent(app: AppContainer): void {
           return;
         }
 
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => undefined);
+
         const requestId = interaction.customId.slice(WHITELIST_APPROVE_PREFIX.length);
         const result = await approveRequestById(app, guildId, requestId, interaction.user);
 
         if (!result.ok) {
-          await interaction.reply({
+          await interaction.editReply({
             embeds: [errorEmbed(result.reason)],
-            flags: MessageFlags.Ephemeral
           });
           return;
         }
 
-        await interaction.reply({
-          flags: MessageFlags.Ephemeral,
+        await interaction.editReply({
           content: `Approved whitelist request for <@${result.request.userId}>.`
         });
+        return;
+      }
+
+      if (interaction.customId.startsWith(WHITELIST_REJECT_PREFIX)) {
+        const guildId = interaction.guildId;
+        if (!guildId) {
+          await interaction.deferUpdate();
+          return;
+        }
+
+        const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+        const allowed = await hasWhitelistAccess(app, guildId, member || null);
+        if (!allowed) {
+          await interaction.deferUpdate();
+          return;
+        }
+
+        const requestId = interaction.customId.slice(WHITELIST_REJECT_PREFIX.length);
+        const modal = new ModalBuilder()
+          .setCustomId(`${WHITELIST_REJECT_MODAL_PREFIX}${requestId}`)
+          .setTitle("Reject Whitelist Request")
+          .addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(
+              new TextInputBuilder()
+                .setCustomId("reject_reason")
+                .setLabel("Reason")
+                .setStyle(TextInputStyle.Paragraph)
+                .setRequired(true)
+                .setMinLength(3)
+                .setMaxLength(300)
+            )
+          );
+
+        await interaction.showModal(modal);
         return;
       }
     }
 
     if (interaction.isModalSubmit()) {
-      if (!interaction.customId.startsWith(WHITELIST_MODAL_PREFIX)) return;
+      if (
+        !interaction.customId.startsWith(WHITELIST_MODAL_PREFIX) &&
+        !interaction.customId.startsWith(WHITELIST_REJECT_MODAL_PREFIX)
+      ) {
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => undefined);
 
       const guildId = interaction.guildId;
       if (!guildId) {
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [errorEmbed("This action is only available in a guild.")],
-          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      if (interaction.customId.startsWith(WHITELIST_REJECT_MODAL_PREFIX)) {
+        const requestId = interaction.customId.slice(WHITELIST_REJECT_MODAL_PREFIX.length);
+        const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+        const allowed = await hasWhitelistAccess(app, guildId, member || null);
+        if (!allowed) {
+          await interaction.deleteReply().catch(() => undefined);
+          return;
+        }
+
+        const reason = interaction.fields.getTextInputValue("reject_reason").trim() || "No reason provided.";
+        const result = await rejectRequestById(app, guildId, requestId, interaction.user, reason);
+        if (!result.ok) {
+          await interaction.editReply({ embeds: [errorEmbed(result.reason)] });
+          return;
+        }
+
+        await interaction.editReply({
+          content: `Rejected whitelist request for <@${result.request.userId}>.`
         });
         return;
       }
 
       const config = await app.prisma.whitelistConfig.findUnique({ where: { guildId } });
       if (!config || !config.staffChannelId) {
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [errorEmbed("Whitelist setup is not configured yet.")],
-          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      const alreadyApproved = await app.prisma.whitelistRequest.findFirst({
+        where: {
+          guildId,
+          userId: interaction.user.id,
+          status: WhitelistRequestStatus.APPROVED
+        }
+      });
+
+      if (alreadyApproved) {
+        await interaction.editReply({
+          embeds: [errorEmbed("You are already whitelisted.")],
         });
         return;
       }
@@ -120,18 +199,16 @@ export function registerInteractionCreateEvent(app: AppContainer): void {
       });
 
       if (pendingForUser) {
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [errorEmbed("You already have a pending whitelist request.")],
-          flags: MessageFlags.Ephemeral
         });
         return;
       }
 
       const username = interaction.fields.getTextInputValue("mc_username").trim();
       if (!isValidMinecraftUsername(username)) {
-        await interaction.reply({
+        await interaction.editReply({
           embeds: [errorEmbed("Invalid username. Use 3-20 characters: letters, numbers, spaces, or _")],
-          flags: MessageFlags.Ephemeral
         });
         return;
       }
@@ -153,6 +230,7 @@ export function registerInteractionCreateEvent(app: AppContainer): void {
       if (isSendableChannel(staffChannelUnknown)) {
         const staffChannel = staffChannelUnknown;
         const reviewMessage = await staffChannel.send({
+          content: "## New Request",
           embeds: [
             requestEmbed({
               requestId: request.id,
@@ -164,7 +242,7 @@ export function registerInteractionCreateEvent(app: AppContainer): void {
               status: request.status
             })
           ],
-          components: [staffApproveButtons(request.id)]
+          components: [staffReviewButtons(request.id)]
         });
 
         await app.prisma.whitelistRequest.update({
@@ -177,14 +255,15 @@ export function registerInteractionCreateEvent(app: AppContainer): void {
         logger.warn({ userId: interaction.user.id }, "Could not DM whitelist pending message");
       });
 
-      await interaction.reply({
-        flags: MessageFlags.Ephemeral,
+      await interaction.editReply({
         content: "Your whitelist request has been submitted successfully. Please wait while staff reviews your request."
       });
       return;
     }
 
     if (!interaction.isChatInputCommand()) return;
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => undefined);
 
     const command = app.commands.get(interaction.commandName);
     if (!command) return;
@@ -199,7 +278,9 @@ export function registerInteractionCreateEvent(app: AppContainer): void {
     } catch (error) {
       logger.error({ error, command: interaction.commandName }, "Slash command failed");
 
-      if (!interaction.replied && !interaction.deferred) {
+      if (interaction.deferred && !interaction.replied) {
+        await interaction.editReply({ embeds: [errorEmbed("Command execution failed.")] });
+      } else if (!interaction.replied) {
         await interaction.reply({ embeds: [errorEmbed("Command execution failed.")], flags: MessageFlags.Ephemeral });
       }
     }

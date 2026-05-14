@@ -2,7 +2,7 @@ import { GuildMember, MessageFlags, SlashCommandBuilder } from "discord.js";
 import { WhitelistRequestStatus } from "@prisma/client";
 import { AppCommand, CommandContext } from "../types";
 import { errorEmbed, successEmbed } from "../utils/embeds";
-import { approveRequestById, hasWhitelistAccess, parseMentionedUserId } from "../utils/whitelist";
+import { hasWhitelistAccess, parseMentionedUserId, rejectRequestById } from "../utils/whitelist";
 
 async function respond(ctx: CommandContext, payload: { content?: string; embeds?: any[] }) {
   if (ctx.interaction) {
@@ -15,6 +15,7 @@ async function respond(ctx: CommandContext, payload: { content?: string; embeds?
       await ctx.interaction.editReply(payload);
       return;
     }
+
     await ctx.interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     return;
   }
@@ -45,12 +46,13 @@ async function getGuildMember(ctx: CommandContext): Promise<GuildMember | null> 
 }
 
 export default {
-  name: "verify",
-  description: "Approve pending whitelist request for a user",
+  name: "reject",
+  description: "Reject pending whitelist request for a user",
   slash: new SlashCommandBuilder()
-    .setName("verify")
-    .setDescription("Approve a pending whitelist request")
-    .addUserOption((opt) => opt.setName("user").setDescription("Discord user to verify").setRequired(true)),
+    .setName("reject")
+    .setDescription("Reject a pending whitelist request")
+    .addUserOption((opt) => opt.setName("user").setDescription("Discord user to reject").setRequired(true))
+    .addStringOption((opt) => opt.setName("reason").setDescription("Reason for rejection").setRequired(true)),
   async execute(ctx: CommandContext) {
     const guildId = getGuildId(ctx);
     if (!guildId) {
@@ -70,8 +72,12 @@ export default {
       ? ctx.interaction!.options.getUser("user", true).id
       : parseMentionedUserId(ctx.args[0]);
 
-    if (!targetUserId) {
-      await respond(ctx, { embeds: [errorEmbed("Usage: verify @user")] });
+    const reason = fromSlash
+      ? ctx.interaction!.options.getString("reason", true).trim()
+      : ctx.args.slice(1).join(" ").trim();
+
+    if (!targetUserId || reason.length < 3) {
+      await respond(ctx, { embeds: [errorEmbed("Usage: reject @user <reason>")] });
       return;
     }
 
@@ -93,7 +99,8 @@ export default {
       return;
     }
 
-    const result = await approveRequestById(ctx.app, guildId, pending.id, ctx.interaction?.user || ctx.message!.author);
+    const reviewer = ctx.interaction?.user || ctx.message!.author;
+    const result = await rejectRequestById(ctx.app, guildId, pending.id, reviewer, reason);
     if (!result.ok) {
       await respond(ctx, { embeds: [errorEmbed(result.reason)] });
       return;
@@ -102,8 +109,8 @@ export default {
     await respond(ctx, {
       embeds: [
         successEmbed(
-          "User Verified",
-          `Approved whitelist request for <@${result.request.userId}> (${result.request.username}).`
+          "User Rejected",
+          `Rejected whitelist request for <@${result.request.userId}> (${result.request.username}).`
         )
       ]
     });

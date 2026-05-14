@@ -36,6 +36,8 @@ export const WHITELIST_BUTTON_JAVA = "whitelist:start:java";
 export const WHITELIST_BUTTON_BEDROCK = "whitelist:start:bedrock";
 export const WHITELIST_MODAL_PREFIX = "whitelist:submit:";
 export const WHITELIST_APPROVE_PREFIX = "whitelist:approve:";
+export const WHITELIST_REJECT_PREFIX = "whitelist:reject:";
+export const WHITELIST_REJECT_MODAL_PREFIX = "whitelist:reject-modal:";
 
 export function whitelistAccessEmbed(): EmbedBuilder {
   return new EmbedBuilder()
@@ -65,12 +67,17 @@ export function whitelistAccessButtons(): ActionRowBuilder<ButtonBuilder> {
   );
 }
 
-export function staffApproveButtons(requestId: string, disabled = false): ActionRowBuilder<ButtonBuilder> {
+export function staffReviewButtons(requestId: string, disabled = false): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${WHITELIST_APPROVE_PREFIX}${requestId}`)
       .setLabel("Approve Request")
       .setStyle(ButtonStyle.Success)
+      .setDisabled(disabled),
+    new ButtonBuilder()
+      .setCustomId(`${WHITELIST_REJECT_PREFIX}${requestId}`)
+      .setLabel("Reject Request")
+      .setStyle(ButtonStyle.Danger)
       .setDisabled(disabled)
   );
 }
@@ -140,6 +147,22 @@ export function approvedDmEmbed(): EmbedBuilder {
         "",
         "You can now join and start playing.",
         "Welcome to the community!"
+      ].join("\n")
+    )
+    .setTimestamp();
+}
+
+export function rejectedDmEmbed(reason: string): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0xed4245)
+    .setTitle("Whitelist Rejected")
+    .setDescription(
+      [
+        "Your whitelist request has been rejected.",
+        "",
+        `Reason: ${reason}`,
+        "",
+        "You can contact staff if you need more details."
       ].join("\n")
     )
     .setTimestamp();
@@ -264,9 +287,97 @@ export async function approveRequestById(
                 reviewedAt: updated.reviewedAt
               })
             ],
-            components: [staffApproveButtons(updated.id, true)]
+            components: [staffReviewButtons(updated.id, true)]
           }).catch(() => {
             logger.warn({ messageId: updated.reviewMessageId }, "Could not update whitelist review message");
+          });
+        }
+      }
+    }
+  }
+
+  return { ok: true, request: updated };
+}
+
+export async function rejectRequestById(
+  app: AppContainer,
+  guildId: string,
+  requestId: string,
+  reviewer: User,
+  reason: string
+): Promise<{ ok: true; request: WhitelistRequest } | { ok: false; reason: string }> {
+  const request = await app.prisma.whitelistRequest.findFirst({
+    where: {
+      id: requestId,
+      guildId,
+      status: WhitelistRequestStatus.PENDING
+    }
+  });
+
+  if (!request) {
+    return { ok: false, reason: "Pending request not found." };
+  }
+
+  const updated = await app.prisma.whitelistRequest.update({
+    where: { id: request.id },
+    data: {
+      status: WhitelistRequestStatus.REJECTED,
+      reviewedById: reviewer.id,
+      reviewedAt: new Date()
+    }
+  });
+
+  const user = await app.client.users.fetch(updated.userId).catch(() => null);
+  if (user) {
+    await user.send({ embeds: [rejectedDmEmbed(reason)] }).catch(() => {
+      logger.warn({ userId: user.id }, "Could not DM whitelist rejection message");
+    });
+  }
+
+  const config = await app.prisma.whitelistConfig.findUnique({ where: { guildId } });
+  if (config) {
+    const staffChannelUnknown: unknown = await app.client.channels.fetch(config.staffChannelId).catch(() => null);
+    if (isSendableChannel(staffChannelUnknown)) {
+      const staffChannel = staffChannelUnknown;
+      await staffChannel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xed4245)
+            .setTitle("Whitelist Rejected")
+            .setDescription(`<@${updated.userId}> was rejected by <@${reviewer.id}>.`)
+            .addFields(
+              { name: "Minecraft Username", value: updated.username, inline: true },
+              { name: "Edition Type", value: formatEdition(updated.edition), inline: true },
+              { name: "Request ID", value: updated.id, inline: true },
+              { name: "Reason", value: reason, inline: false }
+            )
+            .setTimestamp()
+        ]
+      }).catch(() => {
+        logger.warn({ channelId: config.staffChannelId }, "Could not post whitelist rejection log");
+      });
+
+      if (updated.reviewMessageId && isReviewChannel(staffChannelUnknown)) {
+        const reviewChannel = staffChannelUnknown;
+        const reviewMessage = await reviewChannel.messages.fetch(updated.reviewMessageId).catch(() => null);
+        if (reviewMessage) {
+          await reviewMessage.edit({
+            embeds: [
+              requestEmbed({
+                requestId: updated.id,
+                discordUserTag: user ? user.tag : `User ${updated.userId}`,
+                discordUserId: updated.userId,
+                username: updated.username,
+                edition: updated.edition,
+                createdAt: updated.createdAt,
+                status: updated.status,
+                reviewedById: updated.reviewedById,
+                reviewedAt: updated.reviewedAt
+              }).addFields({ name: "Rejection Reason", value: reason, inline: false })
+            ],
+            components: [staffReviewButtons(updated.id, true)]
+          }).catch(() => {
+            logger.warn({ messageId: updated.reviewMessageId }, "Could not update rejected review message");
           });
         }
       }
