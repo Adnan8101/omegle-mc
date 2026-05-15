@@ -229,8 +229,13 @@ export function registerInteractionCreateEvent(app: AppContainer): void {
       const staffChannelUnknown: unknown = await app.client.channels.fetch(config.staffChannelId).catch(() => null);
       if (isSendableChannel(staffChannelUnknown)) {
         const staffChannel = staffChannelUnknown;
+
+        const modRoles = await app.prisma.whitelistModRole.findMany({ where: { guildId } });
+        const roleMentions = modRoles.length ? modRoles.map((r) => `<@&${r.roleId}>`).join(" ") : "";
+        const content = roleMentions ? `## New Request\n${roleMentions}` : "## New Request";
+
         const reviewMessage = await staffChannel.send({
-          content: "## New Request",
+          content,
           embeds: [
             requestEmbed({
               requestId: request.id,
