@@ -3,6 +3,13 @@ import { Server } from "@prisma/client";
 import { Card, timestamp } from "../components";
 import { Colors, Icons } from "../theme";
 
+/** One-line summary of a server's Java and Bedrock addresses. */
+export function addressSummary(server: Server): string {
+  const java = `${Icons.java} \`${server.host}:${server.port}\``;
+  if (server.bedrockPort === null) return java;
+  return `${java}  ${Icons.bedrock} \`${server.bedrockHost ?? server.host}\` port \`${server.bedrockPort}\``;
+}
+
 function badge(enabled: boolean, channelId: string | null): string {
   return enabled && channelId ? `${Icons.online} <#${channelId}>` : `${Icons.disabled} Off`;
 }
@@ -16,7 +23,8 @@ export function serverListView(servers: Server[]): ContainerBuilder {
     card
       .divider()
       .text(
-        `**${escapeMarkdown(server.name)}** · \`${server.host}:${server.port}\``,
+        `**${escapeMarkdown(server.name)}**`,
+        addressSummary(server),
         `-# Status ${badge(server.statusEnabled, server.statusChannelId)}  ·  Bridge ${badge(server.bridgeEnabled, server.bridgeChannelId)}`
       );
   }
@@ -30,7 +38,8 @@ export function serverDetailView(server: Server, title: string): ContainerBuilde
     .header(`${Icons.server} ${escapeMarkdown(server.name)}`, { subtitle: title })
     .divider()
     .fields([
-      ["Address", `\`${server.host}:${server.port}\``],
+      ["Java", `\`${server.host}:${server.port}\``],
+      ["Bedrock", server.bedrockPort === null ? `${Icons.disabled} Not set` : `\`${server.bedrockHost ?? server.host}\` · Port \`${server.bedrockPort}\``],
       ["Status panel", badge(server.statusEnabled, server.statusChannelId)],
       ["Chat bridge", badge(server.bridgeEnabled, server.bridgeChannelId)],
       ["Added", timestamp(server.createdAt)]

@@ -146,3 +146,42 @@ export async function pingServer(host: string, port: number): Promise<PingResult
 
   return { online: false };
 }
+
+export type Edition = "java" | "bedrock";
+
+export type EditionStatus = {
+  edition: Edition;
+  host: string;
+  port: number;
+  ping: PingResult;
+};
+
+type ServerAddresses = { host: string; port: number; bedrockHost: string | null; bedrockPort: number | null };
+
+/**
+ * Checks every address a server has: the main (Java) address and, when set,
+ * the Bedrock address. Both are pinged in parallel.
+ */
+export async function checkServer(server: ServerAddresses): Promise<EditionStatus[]> {
+  const hasBedrock = server.bedrockPort !== null;
+
+  const [primary, bedrock] = await Promise.all([
+    pingServer(server.host, server.port),
+    hasBedrock
+      ? pingBedrock(server.bedrockHost ?? server.host, server.bedrockPort!).catch((): PingResult => ({ online: false }))
+      : Promise.resolve(null)
+  ]);
+
+  // The main address is Java unless it answered as Bedrock (or is a Bedrock port with no separate Bedrock address).
+  const primaryEdition: Edition = primary.online
+    ? primary.edition
+    : !hasBedrock && BEDROCK_PORTS.has(server.port)
+      ? "bedrock"
+      : "java";
+
+  const statuses: EditionStatus[] = [{ edition: primaryEdition, host: server.host, port: server.port, ping: primary }];
+  if (bedrock) {
+    statuses.push({ edition: "bedrock", host: server.bedrockHost ?? server.host, port: server.bedrockPort!, ping: bedrock });
+  }
+  return statuses;
+}

@@ -4,7 +4,13 @@ import { AppContainer, CommandContext } from "../types";
 import { failure } from "../ui/components";
 import { respond } from "../utils/context";
 
-export const SERVER_NAME_PATTERN = /^[\w.-]{1,32}$/;
+/** Letters, numbers, spaces and `_ - . '`, 1–32 characters. */
+export const SERVER_NAME_PATTERN = /^[A-Za-z0-9_.' -]{1,32}$/;
+
+/** Trims and collapses repeated spaces so "Omegle  Mc " and "Omegle Mc" are the same name. */
+export function normalizeName(name: string): string {
+  return name.trim().replace(/\s+/g, " ");
+}
 const HOST_PATTERN = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
 
 /** Channel types a bot message can be posted in. */
@@ -33,7 +39,7 @@ export function parseRoleMention(token: string | undefined): string | null {
 /** Case-insensitive server lookup that replies with an error when nothing matches. */
 export async function findServerOrReply(ctx: CommandContext, guildId: string, name: string): Promise<Server | null> {
   const server = await ctx.app.prisma.server.findFirst({
-    where: { guildId, name: { equals: name, mode: "insensitive" } }
+    where: { guildId, name: { equals: normalizeName(name), mode: "insensitive" } }
   });
 
   if (!server) {

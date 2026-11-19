@@ -1,18 +1,18 @@
 import { ContainerBuilder, escapeMarkdown } from "discord.js";
-import { PingResult } from "../../minecraft/ping";
+import { EditionStatus } from "../../minecraft/ping";
 import { Card, timestamp, truncate } from "../components";
 import { Colors, Icons } from "../theme";
 
 export type StatusViewInput = {
   name: string;
-  host: string;
-  port: number;
-  ping: PingResult;
+  editions: EditionStatus[];
   checkedAt: Date;
   offlineSince?: number;
   refreshSeconds?: number;
   thumbnail?: string | null;
 };
+
+const DEFAULT_JAVA_PORT = 25565;
 
 function playerBar(online: number, max: number): string {
   if (max <= 0) return "";
@@ -29,46 +29,65 @@ function quote(text: string): string {
     .join("\n");
 }
 
+/** How players type the address in their client. */
+export function formatAddress(edition: EditionStatus["edition"], host: string, port: number): string {
+  if (edition === "bedrock") return `**IP:** \`${host}\` · **Port:** \`${port}\``;
+  return port === DEFAULT_JAVA_PORT ? `**IP:** \`${host}\`` : `**IP:** \`${host}:${port}\``;
+}
+
+function editionBlock(status: EditionStatus): string {
+  const { ping } = status;
+  const title =
+    status.edition === "bedrock" ? `${Icons.bedrock} **Bedrock Edition**` : `${Icons.java} **Java Edition**`;
+
+  const state = ping.online
+    ? [`${Icons.online} Online`, `\`${ping.latencyMs} ms\``, ping.version ? escapeMarkdown(truncate(ping.version, 40)) : null]
+        .filter(Boolean)
+        .join(" · ")
+    : `${Icons.offline} Offline`;
+
+  return `${title} — ${state}\n${formatAddress(status.edition, status.host, status.port)}`;
+}
+
 export function statusView(input: StatusViewInput): ContainerBuilder {
-  const { ping } = input;
-  const address = `\`${input.host}:${input.port}\``;
+  const online = input.editions.filter((status) => status.ping.online);
+  const allOnline = online.length === input.editions.length;
+  const lead = online[0]?.ping;
+
   const footer = input.refreshSeconds
     ? `Refreshes every ${input.refreshSeconds}s · Last checked ${timestamp(input.checkedAt)}`
     : `Checked ${timestamp(input.checkedAt)}`;
 
-  if (!ping.online) {
-    return new Card(Colors.danger)
-      .header(`${Icons.offline} ${escapeMarkdown(input.name)}`, {
-        subtitle: input.offlineSince
-          ? `**Offline** · Unreachable since ${timestamp(input.offlineSince)}`
-          : "**Offline** · The server is not responding",
-        thumbnail: input.thumbnail
-      })
-      .divider()
-      .fields([["Address", address]])
-      .spacer()
-      .footer(footer)
-      .build();
+  let color: number = Colors.success;
+  let icon: string = Icons.online;
+  let subtitle: string;
+
+  if (!lead?.online) {
+    color = Colors.danger;
+    icon = Icons.offline;
+    subtitle = input.offlineSince
+      ? `**Offline** · Unreachable since ${timestamp(input.offlineSince)}`
+      : "**Offline** · The server is not responding";
+  } else {
+    const players = `**${lead.playersOnline}** / ${lead.playersMax} players`;
+    if (allOnline) {
+      subtitle = `**Online** · ${players}`;
+    } else {
+      color = Colors.warning;
+      icon = Icons.pending;
+      subtitle = `**Partially online** · ${players}`;
+    }
   }
 
-  const edition = ping.edition === "bedrock" ? `${Icons.bedrock} Bedrock` : `${Icons.java} Java`;
-  const version = ping.version ? ` ${escapeMarkdown(truncate(ping.version, 40))}` : "";
-  const bar = playerBar(ping.playersOnline, ping.playersMax);
-
-  const card = new Card(Colors.success)
-    .header(`${Icons.online} ${escapeMarkdown(input.name)}`, {
-      subtitle: `**Online** · ${edition}${version}`,
-      thumbnail: input.thumbnail
-    })
+  const card = new Card(color)
+    .header(`${icon} ${escapeMarkdown(input.name)}`, { subtitle, thumbnail: input.thumbnail })
     .divider()
-    .fields([
-      ["Players", `\`${ping.playersOnline} / ${ping.playersMax}\`${bar ? `  ${bar}` : ""}`],
-      ["Latency", `\`${ping.latencyMs} ms\``],
-      ["Address", address]
-    ]);
+    .text(input.editions.map(editionBlock).join("\n\n"));
 
-  if (ping.motd) {
-    card.divider().text(quote(ping.motd));
+  if (lead?.online) {
+    const bar = playerBar(lead.playersOnline, lead.playersMax);
+    card.divider().fields([["Players", `\`${lead.playersOnline} / ${lead.playersMax}\`${bar ? `  ${bar}` : ""}`]]);
+    if (lead.motd) card.text(quote(lead.motd));
   }
 
   return card.spacer().footer(footer).build();

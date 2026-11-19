@@ -4,14 +4,19 @@ import { AppContainer } from "../types";
 import { failure, v2 } from "../ui/components";
 import { logger } from "../utils/logger";
 
+/** Splits on whitespace but keeps "quoted text" together, e.g. server add "Omegle MC" host. */
+function splitArgs(input: string): string[] {
+  return [...input.matchAll(/"([^"]*)"|(\S+)/g)].map((match) => match[1] ?? match[2]);
+}
+
 const utilityAliases = new Set(["ping", "uptime"]);
 
 async function handlePrefixCommand(app: AppContainer, message: Message): Promise<boolean> {
   const withoutPrefix = message.content.slice(env.PREFIX.length).trim();
   if (!withoutPrefix) return false;
 
-  const parts = withoutPrefix.split(/\s+/);
-  const commandName = parts[0].toLowerCase();
+  const parts = splitArgs(withoutPrefix);
+  const commandName = (parts[0] ?? "").toLowerCase();
   const command = app.commands.get(commandName);
   if (!command) return false;
 

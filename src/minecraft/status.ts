@@ -5,7 +5,7 @@ import { AppContainer } from "../types";
 import { v2 } from "../ui/components";
 import { statusView } from "../ui/views/status";
 import { logger } from "../utils/logger";
-import { pingServer } from "./ping";
+import { checkServer } from "./ping";
 
 /** Matches the legacy embed-based status messages so they can be cleaned up once. */
 const LEGACY_STATUS_TITLE = /(LIVE|OFFLINE) — /;
@@ -87,11 +87,12 @@ export class MinecraftStatusMonitor {
         return;
       }
 
-      const ping = await pingServer(server.host, server.port);
+      const editions = await checkServer(server);
+      const online = editions.some((status) => status.ping.online);
       const wasOnline = this.lastOnline.get(server.id);
-      this.lastOnline.set(server.id, ping.online);
+      this.lastOnline.set(server.id, online);
 
-      if (ping.online) {
+      if (online) {
         this.offlineSince.delete(server.id);
       } else if (!this.offlineSince.has(server.id)) {
         this.offlineSince.set(server.id, Date.now());
@@ -100,9 +101,7 @@ export class MinecraftStatusMonitor {
       const payload = v2([
         statusView({
           name: server.name,
-          host: server.host,
-          port: server.port,
-          ping,
+          editions,
           checkedAt: new Date(),
           offlineSince: this.offlineSince.get(server.id),
           refreshSeconds: env.STATUS_INTERVAL_SECONDS,
@@ -111,7 +110,7 @@ export class MinecraftStatusMonitor {
       ]);
 
       // Re-post when the server comes back online so members get a fresh unread message.
-      const repost = wasOnline === false && ping.online;
+      const repost = wasOnline === false && online;
       const existing = server.statusMessageId
         ? await channel.messages.fetch(server.statusMessageId).catch(() => null)
         : null;

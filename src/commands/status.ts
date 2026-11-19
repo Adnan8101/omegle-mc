@@ -1,6 +1,6 @@
 import { InteractionContextType, PermissionFlagsBits, SlashCommandBuilder, SlashCommandStringOption } from "discord.js";
 import { env } from "../config/env";
-import { pingServer } from "../minecraft/ping";
+import { checkServer } from "../minecraft/ping";
 import { AppCommand, CommandContext } from "../types";
 import { failure, success, usage } from "../ui/components";
 import { serverDetailView } from "../ui/views/general";
@@ -93,8 +93,8 @@ export default {
     }
 
     if (action === "check") {
-      const ping = await pingServer(server.host, server.port);
-      await respond(ctx, statusView({ name: server.name, host: server.host, port: server.port, ping, checkedAt: new Date() }));
+      const editions = await checkServer(server);
+      await respond(ctx, statusView({ name: server.name, editions, checkedAt: new Date() }));
       return;
     }
 

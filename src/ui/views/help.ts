@@ -13,6 +13,8 @@ type HelpCommand = {
   /** Slash usage, e.g. `/server add <name> <host> [port]` */
   usage: string;
   description: string;
+  /** Prefix form when it differs from the slash form. */
+  prefixUsage?: string;
 };
 
 type HelpCategory = {
@@ -32,8 +34,16 @@ export const helpCategories: HelpCategory[] = [
     summary: "Register the Minecraft servers this Discord tracks.",
     permission: "Manage Server",
     commands: [
-      { usage: "/server add <name> <host> [port]", description: "Register a server. Port defaults to 25565." },
-      { usage: "/server edit <name> [host] [port] [rename]", description: "Change a server's address or name." },
+      {
+        usage: "/server add <name> <host> [port] [bedrock_port] [bedrock_host]",
+        description: "Register a server. Java port defaults to 25565; add `bedrock_port` for Bedrock players.",
+        prefixUsage: 'server add "<name>" <host> [java-port] [bedrock-port]'
+      },
+      {
+        usage: "/server edit <name> [rename] [host] [port] [bedrock_port] [bedrock_host] [remove_bedrock]",
+        description: "Change a server's name or its Java/Bedrock addresses.",
+        prefixUsage: 'server edit "<name>" [host] [port] ["new name"] (Bedrock options: slash only)'
+      },
       { usage: "/server delete <name>", description: "Remove a server and its status panel." },
       { usage: "/server list", description: "Show every server with its panel and bridge state." }
     ]
@@ -100,7 +110,7 @@ export type HelpViewInput = {
 
 /** Turns `/server add <name>` into the prefix form `!server add <name>`. */
 function toPrefix(usage: string, prefix: string): string {
-  return usage.replace(/^\//, prefix);
+  return usage.replace(/^\//, prefix).replace(/<name>/, '"<name>"');
 }
 
 function categorySelect(selected?: string): StringSelectMenuBuilder {
@@ -165,13 +175,13 @@ export function helpView(input: HelpViewInput): ContainerBuilder {
 
   card.text(
     category.commands
-      .map((command) => `**\`${command.usage}\`**\n${command.description}\n-# Prefix: \`${toPrefix(command.usage, input.prefix)}\``)
+      .map((command) => `**\`${command.usage}\`**\n${command.description}\n-# Prefix: \`${command.prefixUsage ? input.prefix + command.prefixUsage : toPrefix(command.usage, input.prefix)}\``)
       .join("\n\n")
   );
 
   return card
     .divider()
     .selectMenu(categorySelect(category.id))
-    .footer("`<required>` · `[optional]`")
+    .footer("`<required>` · `[optional]` · Use quotes for names with spaces in prefix commands")
     .build();
 }

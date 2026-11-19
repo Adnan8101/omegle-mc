@@ -13,6 +13,8 @@ model Server {
   name            String
   host            String
   port            Int
+  bedrockHost     String?
+  bedrockPort     Int?
   statusChannelId String?
   bridgeChannelId String?
   statusEnabled   Boolean  @default(false)
