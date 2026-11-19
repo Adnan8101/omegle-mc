@@ -1,126 +1,103 @@
-import { MessageFlags,  SlashCommandBuilder } from "discord.js";
+import { InteractionContextType, PermissionFlagsBits, SlashCommandBuilder, SlashCommandStringOption } from "discord.js";
+import { env } from "../config/env";
+import { pingServer } from "../minecraft/ping";
 import { AppCommand, CommandContext } from "../types";
-import { errorEmbed, successEmbed } from "../utils/embeds";
+import { failure, success, usage } from "../ui/components";
+import { serverDetailView } from "../ui/views/general";
+import { statusView } from "../ui/views/status";
+import { requireGuild, requirePermission, respond } from "../utils/context";
+import { findServerOrReply, MESSAGE_CHANNEL_TYPES, parseChannelMention, serverAutocomplete } from "./shared";
 
-async function respond(ctx: CommandContext, payload: { content?: string; embeds?: any[] }) {
-  if (ctx.interaction) {
-    if (ctx.interaction.replied) {
-      await ctx.interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    if (ctx.interaction.deferred) {
-      await ctx.interaction.editReply(payload);
-      return;
-    }
-    await ctx.interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  if (ctx.message) {
-    await ctx.message.reply(payload);
-  }
-}
-
-function getGuildId(ctx: CommandContext): string | null {
-  return ctx.interaction?.guildId || ctx.message?.guildId || null;
-}
+const serverOption = (description: string) => (opt: SlashCommandStringOption) =>
+  opt.setName("server").setDescription(description).setRequired(true).setAutocomplete(true);
 
 export default {
   name: "status",
-  description: "Enable, disable, or show status monitor",
+  description: "Live server status panels",
   slash: new SlashCommandBuilder()
     .setName("status")
-    .setDescription("Server status controls")
+    .setDescription("Live Minecraft server status panels")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setContexts(InteractionContextType.Guild)
     .addSubcommand((sub) =>
       sub
         .setName("enable")
-        .setDescription("Enable status updates")
-        .addStringOption((opt) => opt.setName("server").setDescription("Server name").setRequired(true))
-        .addChannelOption((opt) => opt.setName("channel").setDescription("Status channel").setRequired(true))
+        .setDescription("Post an auto-updating status panel")
+        .addStringOption(serverOption("Server to monitor"))
+        .addChannelOption((opt) =>
+          opt.setName("channel").setDescription("Channel for the panel").setRequired(true).addChannelTypes(...MESSAGE_CHANNEL_TYPES)
+        )
     )
     .addSubcommand((sub) =>
-      sub
-        .setName("disable")
-        .setDescription("Disable status updates")
-        .addStringOption((opt) => opt.setName("server").setDescription("Server name").setRequired(true))
+      sub.setName("disable").setDescription("Remove a status panel").addStringOption(serverOption("Server to stop monitoring"))
     )
     .addSubcommand((sub) =>
-      sub
-        .setName("show")
-        .setDescription("Show status config")
-        .addStringOption((opt) => opt.setName("server").setDescription("Server name").setRequired(true))
+      sub.setName("check").setDescription("Ping a server right now").addStringOption(serverOption("Server to ping"))
+    )
+    .addSubcommand((sub) =>
+      sub.setName("show").setDescription("View status panel settings").addStringOption(serverOption("Server to inspect"))
     ),
+
+  autocomplete: serverAutocomplete,
+
   async execute(ctx: CommandContext) {
-    const guildId = getGuildId(ctx);
-    if (!guildId) {
-      await respond(ctx, { embeds: [errorEmbed("This command is guild-only.")] });
+    const guildId = await requireGuild(ctx);
+    if (!guildId || !(await requirePermission(ctx, PermissionFlagsBits.ManageGuild))) return;
+
+    const options = ctx.interaction?.options;
+    const action = options ? options.getSubcommand() : (ctx.args[0] ?? "").toLowerCase();
+    const name = options ? options.getString("server", true) : ctx.args[1];
+
+    if (!["enable", "disable", "check", "show"].includes(action) || !name) {
+      await respond(ctx, usage("status enable <server> [#channel]", "status disable <server>", "status check <server>", "status show <server>"));
       return;
     }
 
-    const fromSlash = Boolean(ctx.interaction);
-    const action = fromSlash ? ctx.interaction!.options.getSubcommand() : (ctx.args[0] || "").toLowerCase();
-    const name = fromSlash ? ctx.interaction!.options.getString("server", false) : ctx.args[1];
-
-    if (!name) {
-      await respond(ctx, { embeds: [errorEmbed("Usage: status <enable|disable|show> <server>")] });
-      return;
-    }
-
-    const server = await ctx.app.prisma.server.findFirst({ where: { guildId, name } });
-    if (!server) {
-      await respond(ctx, { embeds: [errorEmbed(`Server **${name}** not found.`)] });
-      return;
-    }
+    const server = await findServerOrReply(ctx, guildId, name);
+    if (!server) return;
 
     if (action === "enable") {
-      const channelId = fromSlash
-        ? ctx.interaction!.options.getChannel("channel", true).id
-        : ctx.message?.channelId || null;
+      const channelId = options
+        ? options.getChannel("channel", true).id
+        : parseChannelMention(ctx.args[2]) ?? ctx.message?.channelId ?? null;
 
-      if (!channelId) {
-        await respond(ctx, { embeds: [errorEmbed("Could not determine status channel.")] });
+      const channel = channelId ? await ctx.app.client.channels.fetch(channelId).catch(() => null) : null;
+      if (!channel || !channel.isSendable() || channel.isDMBased()) {
+        await respond(ctx, failure("I can't post in that channel. Check that I can view it and send messages there.", "Channel unavailable"));
         return;
+      }
+
+      // Moving the panel: remove the old message first.
+      if (server.statusChannelId && server.statusChannelId !== channel.id) {
+        await ctx.app.statusMonitor.removePanel(server);
       }
 
       await ctx.app.prisma.server.update({
         where: { id: server.id },
-        data: { statusEnabled: true, statusChannelId: channelId }
+        data: { statusEnabled: true, statusChannelId: channel.id }
       });
+      await ctx.app.statusMonitor.refresh(server.id);
 
-      await ctx.app.statusMonitor.runOnce();
-      await respond(ctx, {
-        embeds: [successEmbed("Status Enabled", `Status updates enabled for **${server.name}**.`)]
-      });
+      await respond(
+        ctx,
+        success("Status panel live", `**${server.name}** now has a live panel in <#${channel.id}>, refreshed every ${env.STATUS_INTERVAL_SECONDS}s.`)
+      );
       return;
     }
 
     if (action === "disable") {
-      await ctx.app.prisma.server.update({
-        where: { id: server.id },
-        data: { statusEnabled: false }
-      });
-
-      await respond(ctx, {
-        embeds: [successEmbed("Status Disabled", `Status updates disabled for **${server.name}**.`)]
-      });
+      await ctx.app.statusMonitor.removePanel(server);
+      await ctx.app.prisma.server.update({ where: { id: server.id }, data: { statusEnabled: false } });
+      await respond(ctx, success("Status panel removed", `Stopped monitoring **${server.name}**.`));
       return;
     }
 
-    if (action === "show") {
-      const details = [
-        `Server: **${server.name}**`,
-        `Address: ${server.host}:${server.port}`,
-        `Enabled: ${server.statusEnabled ? "yes" : "no"}`,
-        `Channel: ${server.statusChannelId ? `<#${server.statusChannelId}>` : "not set"}`
-      ].join("\n");
-
-      await respond(ctx, {
-        embeds: [successEmbed("Status Settings", details)]
-      });
+    if (action === "check") {
+      const ping = await pingServer(server.host, server.port);
+      await respond(ctx, statusView({ name: server.name, host: server.host, port: server.port, ping, checkedAt: new Date() }));
       return;
     }
 
-    await respond(ctx, { embeds: [errorEmbed("Usage: status <enable|disable|show> <server>")] });
+    await respond(ctx, serverDetailView(server, "Status panel settings"));
   }
 } satisfies AppCommand;

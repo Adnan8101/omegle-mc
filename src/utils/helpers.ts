@@ -13,15 +13,3 @@ export function formatDuration(ms: number): string {
 
   return parts.join(" ");
 }
-
-export function nowTime(): string {
-  return new Date().toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-}
-
-export function sanitizeBridgeText(input: string): string {
-  return input.replace(/[`*_~|]/g, "").trim();
-}

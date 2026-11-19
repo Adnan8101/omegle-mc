@@ -1,157 +1,175 @@
 import { EventEmitter } from "events";
 import mineflayer from "mineflayer";
-import { lookup } from "dns/promises";
 import { env } from "../config/env";
 import { logger } from "../utils/logger";
 
-type ChatPayload = {
-  username: string;
-  message: string;
-};
+export type ChatPayload = { username: string; message: string };
+export type PlayerEventPayload = { username: string; type: "join" | "leave" };
 
+/** Minecraft caps chat packets at 256 characters; longer messages kick the bot. */
+export const MC_CHAT_LIMIT = 256;
+
+/** Ignore join/leave spam emitted for every online player right after we log in. */
+const JOIN_GRACE_MS = 5000;
+
+/**
+ * Wraps a single Mineflayer bot used for the chat bridge.
+ * Emits: "connected", "disconnected", "chat" (ChatPayload), "player" (PlayerEventPayload).
+ */
 export class MinecraftClient extends EventEmitter {
-  private client: mineflayer.Bot | null = null;
+  private bot: mineflayer.Bot | null = null;
   private reconnectIndex = 0;
-  private readonly reconnectDelays = [1000, 2000, 5000, 10000, 30000];
+  private readonly reconnectDelays = [5_000, 10_000, 30_000, 60_000];
   private readonly queue: string[] = [];
   private queueActive = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
+  private spawnedAt = 0;
   public connected = false;
 
-  async connect(): Promise<void> {
+  get target(): string {
+    return `${env.MC_SERVER_HOST}:${env.MC_JAVA_PORT}`;
+  }
+
+  get username(): string {
+    return this.bot?.username ?? env.MC_BOT_USERNAME;
+  }
+
+  connect(): void {
+    if (this.stopped) return;
     this.clearReconnectTimer();
+    this.disposeBot();
+
+    logger.info({ target: this.target, username: env.MC_BOT_USERNAME }, "Connecting Minecraft bridge bot");
 
     try {
-      await lookup(env.MC_SERVER_HOST);
-
-      logger.info(`Connecting Mineflayer to ${env.MC_SERVER_HOST}:${env.MC_JAVA_PORT} as ${env.MC_BOT_USERNAME}...`);
-      
-      this.client = mineflayer.createBot({
+      const bot = mineflayer.createBot({
         host: env.MC_SERVER_HOST,
         port: env.MC_JAVA_PORT,
         username: env.MC_BOT_USERNAME,
-        auth: "offline" // Assuming cracked/offline since Geyser is used
+        auth: env.MC_BOT_AUTH,
+        hideErrors: true
       });
-
-      this.bindClientEvents();
+      this.bot = bot;
+      this.bindEvents(bot);
     } catch (error) {
-      logger.warn({ error, host: env.MC_SERVER_HOST, port: env.MC_JAVA_PORT }, "Skipping Minecraft connection");
-      this.handleDisconnect(error);
+      logger.warn({ error, target: this.target }, "Could not create Minecraft bot");
+      this.handleDisconnect();
     }
   }
 
-  sendChat(message: string): void {
-    if (!message || message.trim().length === 0) return;
-    this.queue.push(message.trim());
-    this.processQueue();
+  /** Permanently stops the bot (used on shutdown). */
+  stop(): void {
+    this.stopped = true;
+    this.clearReconnectTimer();
+    this.disposeBot();
+    this.connected = false;
   }
 
-  private bindClientEvents(): void {
-    if (!this.client) return;
+  sendChat(message: string): boolean {
+    const trimmed = message.trim();
+    if (!trimmed) return false;
+    if (!this.connected) return false;
 
-    this.client.on("spawn", () => {
-      logger.info({ username: env.MC_BOT_USERNAME }, "Minecraft client spawned and is connected!");
+    // Bound the queue so an outage can't build an unbounded backlog.
+    if (this.queue.length >= 50) this.queue.shift();
+    this.queue.push(trimmed.slice(0, MC_CHAT_LIMIT));
+    this.processQueue();
+    return true;
+  }
+
+  private bindEvents(bot: mineflayer.Bot): void {
+    // Every handler ignores events from bots that have since been replaced.
+    const current = () => this.bot === bot;
+
+    bot.once("spawn", () => {
+      if (!current()) return;
+      logger.info({ username: bot.username }, "Minecraft bridge bot connected");
       this.connected = true;
+      this.spawnedAt = Date.now();
       this.reconnectIndex = 0;
       this.emit("connected");
     });
 
-    this.client.on("chat", (username, message) => {
-      if (username === this.client?.username) return; // Ignore our own messages
-      if (!message || message.trim().length === 0) return;
-
-      logger.debug({ username, message }, "Received chat from Minecraft");
-
-      const payload: ChatPayload = { username, message };
-      this.emit("chat", payload);
+    bot.on("chat", (username, message) => {
+      if (!current() || username === bot.username) return;
+      if (!message?.trim()) return;
+      this.emit("chat", { username, message } satisfies ChatPayload);
     });
 
-    this.client.on("end", (reason) => {
-      logger.warn({ reason }, "Minecraft client ended/disconnected");
-      this.handleDisconnect(reason);
+    bot.on("playerJoined", (player) => {
+      if (!current() || !this.connected || player.username === bot.username) return;
+      if (Date.now() - this.spawnedAt < JOIN_GRACE_MS) return;
+      this.emit("player", { username: player.username, type: "join" } satisfies PlayerEventPayload);
     });
 
-    this.client.on("kicked", (reason) => {
-      logger.warn({ reason }, "Minecraft client was kicked");
-      this.handleDisconnect(reason);
+    bot.on("playerLeft", (player) => {
+      if (!current() || !this.connected || player.username === bot.username) return;
+      this.emit("player", { username: player.username, type: "leave" } satisfies PlayerEventPayload);
     });
 
-    this.client.on("error", (error: any) => {
-      logger.error({ 
-        errorMessage: error?.message || error, 
-        stack: error?.stack 
-      }, "Minecraft client encountered an error");
-      this.handleDisconnect(error);
+    bot.on("kicked", (reason) => {
+      if (!current()) return;
+      logger.warn({ reason }, "Minecraft bridge bot was kicked");
+    });
+
+    bot.on("error", (error) => {
+      if (!current()) return;
+      logger.warn({ error: error?.message ?? String(error) }, "Minecraft bridge bot error");
+      // "end" usually follows; if the socket never opened it may not, so schedule defensively.
+      this.handleDisconnect();
+    });
+
+    bot.on("end", (reason) => {
+      if (!current()) return;
+      logger.warn({ reason }, "Minecraft bridge bot disconnected");
+      this.handleDisconnect();
     });
   }
 
   private processQueue(): void {
     if (this.queueActive) return;
-    if (this.queue.length === 0) return;
-
     this.queueActive = true;
 
     const run = () => {
       const next = this.queue.shift();
-      if (!next) {
+      if (!next || !this.bot || !this.connected) {
         this.queueActive = false;
         return;
       }
 
-      this.writeChat(next);
+      try {
+        this.bot.chat(next);
+      } catch (error) {
+        logger.error({ error }, "Failed to send chat to Minecraft");
+      }
 
-      setTimeout(() => {
-        if (this.queue.length > 0) {
-          run();
-          return;
-        }
-        this.queueActive = false;
-      }, 800);
+      // Space messages out to stay under server spam filters.
+      setTimeout(run, 800);
     };
 
     run();
   }
 
-  private writeChat(message: string): void {
-    if (!this.client || !this.connected) {
-      logger.warn({ connected: this.connected }, "Dropped chat message because Minecraft client is not connected");
-      return;
-    }
-
-    try {
-      logger.info({ message }, "Sending chat to Minecraft");
-      this.client.chat(message);
-    } catch (error) {
-      logger.error({ error }, "Failed to send chat to Minecraft");
-      this.emit("error", error);
-    }
-  }
-
-  private handleDisconnect(reason: unknown): void {
-    const wasConnected = this.connected;
-
-    if (wasConnected) {
+  private handleDisconnect(): void {
+    if (this.connected) {
       this.connected = false;
       this.emit("disconnected");
     }
-
-    if (wasConnected && reason) {
-      logger.warn({ reason }, "Minecraft connection lost");
-    }
-
-    // prevent multiple timers
+    this.queue.length = 0;
     this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
-    this.clearReconnectTimer();
+    if (this.stopped || this.reconnectTimer) return;
 
     const delay = this.reconnectDelays[Math.min(this.reconnectIndex, this.reconnectDelays.length - 1)];
     this.reconnectIndex += 1;
+    logger.info({ delayMs: delay }, "Scheduling Minecraft bridge reconnect");
 
-    this.reconnectTimer = setTimeout(async () => {
-      logger.info({ delay }, "Reconnecting Minecraft client");
-      await this.connect();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
     }, delay);
   }
 
@@ -159,6 +177,20 @@ export class MinecraftClient extends EventEmitter {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private disposeBot(): void {
+    const bot = this.bot;
+    this.bot = null;
+    if (!bot) return;
+
+    bot.removeAllListeners();
+    bot.on("error", () => undefined); // swallow late socket errors from the old instance
+    try {
+      bot.quit();
+    } catch {
+      // already closed
     }
   }
 }

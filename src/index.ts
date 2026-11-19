@@ -1,14 +1,11 @@
-import {
-  Client,
-  GatewayIntentBits,
-  Partials
-} from "discord.js";
+import { Client, GatewayIntentBits } from "discord.js";
 import { prisma } from "./config/prisma";
 import { env } from "./config/env";
 import serverCommand from "./commands/server";
 import statusCommand from "./commands/status";
 import bridgeCommand from "./commands/bridge";
 import utilityCommand from "./commands/utility";
+import helpCommand from "./commands/help";
 import whitelistCommand from "./commands/whitelist";
 import verifyCommand from "./commands/verify";
 import rejectCommand from "./commands/reject";
@@ -23,12 +20,7 @@ import { AppCommand, AppContainer } from "./types";
 import { logger } from "./utils/logger";
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
 const commandList: AppCommand[] = [
@@ -36,6 +28,7 @@ const commandList: AppCommand[] = [
   statusCommand,
   bridgeCommand,
   utilityCommand,
+  helpCommand,
   whitelistCommand,
   verifyCommand,
   rejectCommand
@@ -44,21 +37,18 @@ const commandList: AppCommand[] = [
 const commands = new Map<string, AppCommand>();
 for (const command of commandList) {
   commands.set(command.name, command);
-
-  for (const alias of command.aliases || []) {
+  for (const alias of command.aliases ?? []) {
     commands.set(alias, command);
   }
 }
 
-const app: AppContainer = {
+const app = {
   client,
   prisma,
   commands,
   startedAt: Date.now(),
-  mcClient: new MinecraftClient(),
-  mcBridge: undefined as unknown as MinecraftBridge,
-  statusMonitor: undefined as unknown as MinecraftStatusMonitor
-};
+  mcClient: new MinecraftClient()
+} as AppContainer;
 
 app.mcBridge = new MinecraftBridge(app);
 app.statusMonitor = new MinecraftStatusMonitor(app);
@@ -68,23 +58,35 @@ registerInteractionCreateEvent(app);
 registerMessageCreateEvent(app);
 registerMinecraftEvents(app);
 
-client.on("messageCreate", async (message) => {
-  await app.mcBridge.forwardDiscordToMinecraft(message);
+client.on("error", (error) => logger.error({ error }, "Discord client error"));
+client.on("warn", (message) => logger.warn(message));
+
+process.on("unhandledRejection", (reason) => {
+  logger.error({ reason }, "Unhandled promise rejection");
 });
+
+process.on("uncaughtException", (error) => {
+  logger.fatal({ error }, "Uncaught exception");
+  void shutdown(1);
+});
+
+let shuttingDown = false;
+async function shutdown(code = 0): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info("Shutting down");
+
+  app.statusMonitor.stop();
+  app.mcClient.stop();
+  await client.destroy().catch(() => undefined);
+  await prisma.$disconnect().catch(() => undefined);
+  process.exit(code);
+}
+
+process.on("SIGINT", () => void shutdown(0));
+process.on("SIGTERM", () => void shutdown(0));
 
 client.login(env.DISCORD_TOKEN).catch((error) => {
-  logger.error({ error }, "Failed to login Discord client");
-  process.exit(1);
-});
-
-process.on("SIGINT", async () => {
-  logger.info("Shutting down");
-  await prisma.$disconnect();
-  process.exit(0);
-});
-
-process.on("SIGTERM", async () => {
-  logger.info("Shutting down");
-  await prisma.$disconnect();
-  process.exit(0);
+  logger.fatal({ error }, "Failed to log in to Discord");
+  void shutdown(1);
 });

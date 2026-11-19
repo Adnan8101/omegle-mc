@@ -17,7 +17,10 @@ model Server {
   bridgeChannelId String?
   statusEnabled   Boolean  @default(false)
   bridgeEnabled   Boolean  @default(false)
+  statusMessageId String?
   createdAt       DateTime @default(now())
+
+  @@index([guildId])
 }
 
 enum WhitelistEdition {
@@ -64,6 +67,7 @@ model WhitelistRequest {
   reviewedById    String?
   reviewedAt      DateTime?
   reviewMessageId String?
+  reviewNote      String?
   createdAt       DateTime               @default(now())
   config          WhitelistConfig        @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
 

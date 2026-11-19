@@ -1,215 +1,154 @@
-import { Message, TextChannel } from "discord.js";
+import { Server } from "@prisma/client";
+import { GuildTextBasedChannel } from "discord.js";
+import { env } from "../config/env";
 import { AppContainer } from "../types";
-import { statusEmbed } from "../utils/embeds";
+import { v2 } from "../ui/components";
+import { statusView } from "../ui/views/status";
 import { logger } from "../utils/logger";
+import { pingServer } from "./ping";
 
-let bedrockProtocol: any = null;
-
-try {
-  bedrockProtocol = require("bedrock-protocol");
-} catch {
-  bedrockProtocol = null;
-}
-
-type PingData = {
-  online: boolean;
-  pingMs?: number;
-  playersOnline?: number;
-  playersMax?: number;
-  motd?: string;
-};
-
-function formatMotd(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (!value || typeof value !== "object") return "A Minecraft Server";
-
-  const parts: string[] = [];
-  const walk = (node: unknown): void => {
-    if (!node) return;
-    if (typeof node === "string") {
-      parts.push(node);
-      return;
-    }
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item);
-      return;
-    }
-    if (typeof node === "object") {
-      const record = node as Record<string, unknown>;
-      if (typeof record.text === "string") parts.push(record.text);
-      if (Array.isArray(record.extra)) walk(record.extra);
-      if (Array.isArray(record.with)) walk(record.with);
-    }
-  };
-
-  walk(value);
-  return parts.join(" ").replace(/\s+/g, " ").trim() || "A Minecraft Server";
-}
+/** Matches the legacy embed-based status messages so they can be cleaned up once. */
+const LEGACY_STATUS_TITLE = /(LIVE|OFFLINE) — /;
 
 export class MinecraftStatusMonitor {
   private timer: NodeJS.Timeout | null = null;
-  private readonly messageMap = new Map<string, string>();
-  private readonly onlineStateMap = new Map<string, boolean>();
+  private running = false;
+  private readonly inFlight = new Set<string>();
+  private readonly lastOnline = new Map<string, boolean>();
+  private readonly offlineSince = new Map<string, number>();
 
   constructor(private readonly app: AppContainer) {}
 
   start(): void {
+    this.stop();
+    void this.runOnce();
+    this.timer = setInterval(() => void this.runOnce(), env.STATUS_INTERVAL_SECONDS * 1000);
+  }
+
+  stop(): void {
     if (this.timer) clearInterval(this.timer);
-
-    this.runOnce().catch((error) => {
-      logger.error({ error }, "Initial status update failed");
-    });
-
-    this.timer = setInterval(() => {
-      this.runOnce().catch((error) => {
-        logger.error({ error }, "Scheduled status update failed");
-      });
-    }, 5000);
+    this.timer = null;
   }
 
+  /** Refreshes every enabled status panel. Overlapping runs are skipped. */
   async runOnce(): Promise<void> {
-    const servers = await this.app.prisma.server.findMany({
-      where: {
-        statusEnabled: true,
-        statusChannelId: { not: null }
-      }
-    });
+    if (this.running) return;
+    this.running = true;
 
-    for (const server of servers) {
-      if (!server.statusChannelId) continue;
-
-      const channel = await this.app.client.channels.fetch(server.statusChannelId).catch(() => null);
-      if (!channel || !channel.isTextBased()) continue;
-
-      const ping = await this.pingServer(server.host, server.port);
-
-      const previousState = this.onlineStateMap.get(server.id);
-      const isOnline = ping.online;
-      this.onlineStateMap.set(server.id, isOnline);
-      
-      const justReconnected = previousState === false && isOnline === true;
-
-      const embed = statusEmbed({
-        name: server.name,
-        online: ping.online,
-        host: server.host,
-        port: server.port,
-        pingMs: ping.pingMs,
-        playersOnline: ping.playersOnline,
-        playersMax: ping.playersMax,
-        motd: ping.motd
-      });
-
-      await this.upsertStatusMessage(server.id, channel as TextChannel, embed, justReconnected);
-    }
-  }
-
-  private async upsertStatusMessage(serverId: string, channel: TextChannel, embed: any, forceNew: boolean = false): Promise<void> {
-    const existingMessageId = this.messageMap.get(serverId);
-
-    if (existingMessageId) {
-      const existing = await channel.messages.fetch(existingMessageId).catch(() => null);
-      if (existing) {
-        if (forceNew) {
-          await existing.delete().catch(() => null);
-          this.messageMap.delete(serverId);
-        } else {
-          await existing.edit({ embeds: [embed] });
-          return;
-        }
-      }
-    } 
-    
-    if (!this.messageMap.has(serverId)) {
-      // First time running after restart or forced new message: clean up old bot messages
-      try {
-        const messages = await channel.messages.fetch({ limit: 30 });
-        const oldMessages = messages.filter(m => m.author.id === this.app.client.user?.id);
-        for (const [id, msg] of oldMessages) {
-          await msg.delete().catch(() => null);
-        }
-      } catch (error) {
-        // ignore if we lack permissions
-      }
-    }
-
-    const sent: Message = await channel.send({ embeds: [embed] });
-    this.messageMap.set(serverId, sent.id);
-  }
-
-  private async pingServer(host: string, port: number): Promise<PingData> {
     try {
-      const minecraftProtocol = require("minecraft-protocol");
-      const started = Date.now();
-
-      const javaPing = await new Promise<any>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Ping timed out"));
-        }, 8000);
-
-        minecraftProtocol.ping({ host, port }, (error: unknown, data: any) => {
-          clearTimeout(timeout);
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve(data);
-        });
+      const servers = await this.app.prisma.server.findMany({
+        where: { statusEnabled: true, statusChannelId: { not: null } }
       });
+      await Promise.allSettled(servers.map((server) => this.updateServer(server)));
+    } catch (error) {
+      logger.error({ error }, "Status update cycle failed");
+    } finally {
+      this.running = false;
+    }
+  }
 
-      const elapsed = Date.now() - started;
+  /** Refreshes a single server's panel immediately (used after config changes). */
+  async refresh(serverId: string): Promise<void> {
+    const server = await this.app.prisma.server.findUnique({ where: { id: serverId } });
+    if (server?.statusEnabled && server.statusChannelId) {
+      await this.updateServer(server);
+    }
+  }
 
-      const playersOnline = Number(javaPing?.players?.online ?? 0);
-      const playersMax = Number(javaPing?.players?.max ?? 0);
-      const motd = formatMotd(javaPing?.description ?? javaPing?.motd ?? "A Minecraft Server");
+  /** Deletes a server's panel message and clears the stored reference. */
+  async removePanel(server: Pick<Server, "id" | "statusChannelId" | "statusMessageId">): Promise<void> {
+    if (server.statusChannelId && server.statusMessageId) {
+      const channel = await this.fetchChannel(server.statusChannelId);
+      const message = await channel?.messages.fetch(server.statusMessageId).catch(() => null);
+      await message?.delete().catch(() => undefined);
+    }
 
-      return {
-        online: true,
-        pingMs: elapsed,
-        playersOnline,
-        playersMax,
-        motd
-      };
-    } catch (javaError) {
-      try {
-        const { Client } = require("jsp-raknet");
-        const client = new Client(host, port);
+    await this.app.prisma.server
+      .update({ where: { id: server.id }, data: { statusMessageId: null } })
+      .catch(() => undefined);
+    this.lastOnline.delete(server.id);
+    this.offlineSince.delete(server.id);
+  }
 
-        const started = Date.now();
+  private async fetchChannel(channelId: string): Promise<GuildTextBasedChannel | null> {
+    const channel = await this.app.client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || channel.isDMBased()) return null;
+    return channel;
+  }
 
-        const serverName = await new Promise<string>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            client.close();
-            reject(new Error("Ping timed out"));
-          }, 8000);
+  private async updateServer(server: Server): Promise<void> {
+    if (!server.statusChannelId || this.inFlight.has(server.id)) return;
+    this.inFlight.add(server.id);
 
-          client.ping((name: string) => {
-            clearTimeout(timeout);
-            client.close();
-            resolve(name);
-          });
-        });
-
-        const elapsed = Date.now() - started;
-        const response = bedrockProtocol?.ServerAdvertisement?.fromServerName?.(serverName);
-        const parts = serverName.split(";");
-
-        const playersOnline = Number(response?.playersOnline ?? response?.players?.online ?? parts[4] ?? 0);
-        const playersMax = Number(response?.playersMax ?? response?.players?.max ?? parts[5] ?? 0);
-        const motdRaw = response?.motd ?? response?.description ?? parts[1] ?? "A Minecraft Server";
-        const motd = Array.isArray(motdRaw) ? motdRaw.join(" ") : String(motdRaw);
-
-        return {
-          online: true,
-          pingMs: elapsed,
-          playersOnline,
-          playersMax,
-          motd
-        };
-      } catch {
-        logger.debug({ host, port, javaError }, "Status ping failed for both Java and Bedrock");
-        return { online: false };
+    try {
+      const channel = await this.fetchChannel(server.statusChannelId);
+      if (!channel) {
+        logger.warn({ server: server.name, channelId: server.statusChannelId }, "Status channel unavailable");
+        return;
       }
+
+      const ping = await pingServer(server.host, server.port);
+      const wasOnline = this.lastOnline.get(server.id);
+      this.lastOnline.set(server.id, ping.online);
+
+      if (ping.online) {
+        this.offlineSince.delete(server.id);
+      } else if (!this.offlineSince.has(server.id)) {
+        this.offlineSince.set(server.id, Date.now());
+      }
+
+      const payload = v2([
+        statusView({
+          name: server.name,
+          host: server.host,
+          port: server.port,
+          ping,
+          checkedAt: new Date(),
+          offlineSince: this.offlineSince.get(server.id),
+          refreshSeconds: env.STATUS_INTERVAL_SECONDS,
+          thumbnail: channel.guild.iconURL({ size: 128 })
+        })
+      ]);
+
+      // Re-post when the server comes back online so members get a fresh unread message.
+      const repost = wasOnline === false && ping.online;
+      const existing = server.statusMessageId
+        ? await channel.messages.fetch(server.statusMessageId).catch(() => null)
+        : null;
+
+      if (existing && !repost) {
+        await existing.edit(payload);
+        return;
+      }
+
+      if (existing) {
+        await existing.delete().catch(() => undefined);
+      } else if (!server.statusMessageId) {
+        await this.cleanupLegacyMessages(channel);
+      }
+
+      const sent = await channel.send(payload);
+      await this.app.prisma.server.update({ where: { id: server.id }, data: { statusMessageId: sent.id } });
+    } catch (error) {
+      logger.error({ error, server: server.name }, "Failed to update status panel");
+    } finally {
+      this.inFlight.delete(server.id);
+    }
+  }
+
+  /** One-time removal of the old embed-based status messages from earlier versions. */
+  private async cleanupLegacyMessages(channel: GuildTextBasedChannel): Promise<void> {
+    try {
+      const recent = await channel.messages.fetch({ limit: 30 });
+
+      for (const message of recent.values()) {
+        const isLegacy =
+          message.author.id === this.app.client.user?.id &&
+          message.embeds.some((embed) => LEGACY_STATUS_TITLE.test(embed.title ?? ""));
+        if (isLegacy) await message.delete().catch(() => undefined);
+      }
+    } catch {
+      // Missing Read Message History permission — nothing to clean.
     }
   }
 }

@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import {
+  AutocompleteInteraction,
   ChatInputCommandInteraction,
   Client,
   Message,
@@ -27,6 +28,7 @@ export type AppCommand = {
   aliases?: string[];
   slash?: SlashCommandBuilder | SlashCommandSubcommandsOnlyBuilder | SlashCommandOptionsOnlyBuilder;
   execute: (ctx: CommandContext) => Promise<void>;
+  autocomplete?: (interaction: AutocompleteInteraction, app: AppContainer) => Promise<void>;
 };
 
 export type AppContainer = {

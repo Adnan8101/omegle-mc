@@ -1,173 +1,157 @@
-import { MessageFlags,  SlashCommandBuilder } from "discord.js";
+import { InteractionContextType, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { AppCommand, CommandContext } from "../types";
-import { errorEmbed, successEmbed } from "../utils/embeds";
+import { failure, info, success, usage } from "../ui/components";
+import { serverDetailView, serverListView } from "../ui/views/general";
+import { requireGuild, requirePermission, respond } from "../utils/context";
+import { findServerOrReply, isValidHost, isValidPort, SERVER_NAME_PATTERN, serverAutocomplete } from "./shared";
 
-async function respond(ctx: CommandContext, payload: { content?: string; embeds?: any[] }) {
-  if (ctx.interaction) {
-    if (ctx.interaction.replied) {
-      await ctx.interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
-      return;
-    }
+const DEFAULT_JAVA_PORT = 25565;
+const NAME_RULES = "Names are 1–32 characters: letters, numbers, `_`, `-` or `.`.";
 
-    if (ctx.interaction.deferred) {
-      await ctx.interaction.editReply(payload);
-      return;
-    }
-    await ctx.interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  if (ctx.message) {
-    await ctx.message.reply(payload);
-  }
-}
-
-function getGuildId(ctx: CommandContext): string | null {
-  return ctx.interaction?.guildId || ctx.message?.guildId || null;
+async function nameTaken(ctx: CommandContext, guildId: string, name: string, exceptId?: string): Promise<boolean> {
+  const clash = await ctx.app.prisma.server.findFirst({
+    where: { guildId, name: { equals: name, mode: "insensitive" }, ...(exceptId ? { NOT: { id: exceptId } } : {}) }
+  });
+  if (clash) await respond(ctx, failure(`A server named **${clash.name}** already exists.`, "Name in use"));
+  return Boolean(clash);
 }
 
 export default {
   name: "server",
-  description: "Manage Minecraft server settings",
+  description: "Manage Minecraft servers",
   aliases: ["srv"],
   slash: new SlashCommandBuilder()
     .setName("server")
-    .setDescription("Manage Minecraft server")
+    .setDescription("Manage the Minecraft servers tracked in this Discord")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setContexts(InteractionContextType.Guild)
     .addSubcommand((sub) =>
       sub
         .setName("add")
-        .setDescription("Add server for this guild")
-        .addStringOption((opt) => opt.setName("name").setDescription("Server name").setRequired(true))
-        .addStringOption((opt) => opt.setName("host").setDescription("Server host").setRequired(true))
+        .setDescription("Register a Minecraft server")
+        .addStringOption((opt) => opt.setName("name").setDescription("Short name, e.g. survival").setRequired(true).setMaxLength(32))
+        .addStringOption((opt) => opt.setName("host").setDescription("Hostname or IP address").setRequired(true).setMaxLength(253))
         .addIntegerOption((opt) =>
-          opt.setName("port").setDescription("Server port").setRequired(true).setMinValue(1).setMaxValue(65535)
+          opt.setName("port").setDescription(`Port (default ${DEFAULT_JAVA_PORT})`).setMinValue(1).setMaxValue(65535)
         )
     )
     .addSubcommand((sub) =>
       sub
         .setName("edit")
-        .setDescription("Edit an existing server")
-        .addStringOption((opt) => opt.setName("name").setDescription("Server name").setRequired(true))
-        .addStringOption((opt) => opt.setName("host").setDescription("New host").setRequired(false))
-        .addIntegerOption((opt) =>
-          opt.setName("port").setDescription("New port").setRequired(false).setMinValue(1).setMaxValue(65535)
-        )
+        .setDescription("Change a server's name, host or port")
+        .addStringOption((opt) => opt.setName("name").setDescription("Server to edit").setRequired(true).setAutocomplete(true))
+        .addStringOption((opt) => opt.setName("host").setDescription("New hostname or IP").setMaxLength(253))
+        .addIntegerOption((opt) => opt.setName("port").setDescription("New port").setMinValue(1).setMaxValue(65535))
+        .addStringOption((opt) => opt.setName("rename").setDescription("New name").setMaxLength(32))
     )
     .addSubcommand((sub) =>
       sub
         .setName("delete")
-        .setDescription("Delete a server")
-        .addStringOption((opt) => opt.setName("name").setDescription("Server name").setRequired(true))
+        .setDescription("Remove a server and its status panel")
+        .addStringOption((opt) => opt.setName("name").setDescription("Server to delete").setRequired(true).setAutocomplete(true))
     )
-    .addSubcommand((sub) => sub.setName("list").setDescription("List servers for this guild")),
+    .addSubcommand((sub) => sub.setName("list").setDescription("Show every configured server")),
+
+  autocomplete: serverAutocomplete,
+
   async execute(ctx: CommandContext) {
-    const guildId = getGuildId(ctx);
-    if (!guildId) {
-      await respond(ctx, { embeds: [errorEmbed("This command can only be used inside a guild.")] });
-      return;
-    }
+    const guildId = await requireGuild(ctx);
+    if (!guildId || !(await requirePermission(ctx, PermissionFlagsBits.ManageGuild))) return;
 
-    const fromSlash = Boolean(ctx.interaction);
-    const action = fromSlash ? ctx.interaction!.options.getSubcommand() : (ctx.args[0] || "").toLowerCase();
-
-    if (!["add", "edit", "delete", "list"].includes(action)) {
-      await respond(ctx, {
-        embeds: [errorEmbed("Usage: /server <add|edit|delete|list> or !server <add|edit|delete|list>")]
-      });
-      return;
-    }
+    const options = ctx.interaction?.options;
+    const action = options ? options.getSubcommand() : (ctx.args[0] ?? "").toLowerCase();
+    const p = ctx.app.prisma;
 
     if (action === "add") {
-      const name = fromSlash ? ctx.interaction!.options.getString("name", true) : ctx.args[1];
-      const host = fromSlash ? ctx.interaction!.options.getString("host", true) : ctx.args[2];
-      const portRaw = fromSlash ? ctx.interaction!.options.getInteger("port", true) : Number(ctx.args[3]);
-      const port = Number(portRaw);
+      const name = options ? options.getString("name", true).trim() : ctx.args[1];
+      const host = (options ? options.getString("host", true) : ctx.args[2])?.trim().toLowerCase();
+      const port = options ? options.getInteger("port") ?? DEFAULT_JAVA_PORT : Number(ctx.args[3] ?? DEFAULT_JAVA_PORT);
 
-      if (!name || !host || !Number.isInteger(port)) {
-        await respond(ctx, { embeds: [errorEmbed("Usage: server add <name> <host> <port>")] });
+      if (!name || !host) {
+        await respond(ctx, usage("server add <name> <host> [port]"));
         return;
       }
+      if (!SERVER_NAME_PATTERN.test(name)) {
+        await respond(ctx, failure(NAME_RULES, "Invalid name"));
+        return;
+      }
+      if (!isValidHost(host) || !isValidPort(port)) {
+        await respond(ctx, failure("Enter a valid hostname/IP and a port between 1 and 65535.", "Invalid address"));
+        return;
+      }
+      if (await nameTaken(ctx, guildId, name)) return;
 
-      await ctx.app.prisma.server.create({
-        data: { guildId, name, host, port }
-      });
-
-      await respond(ctx, {
-        embeds: [successEmbed("Server Added", `Saved **${name}** as ${host}:${port}.`)]
-      });
+      const server = await p.server.create({ data: { guildId, name, host, port } });
+      await respond(ctx, serverDetailView(server, `✅ Server added — next, try \`/status enable\` or \`/bridge enable\`.`));
       return;
     }
 
     if (action === "edit") {
-      const name = fromSlash ? ctx.interaction!.options.getString("name", true) : ctx.args[1];
-      const host = fromSlash ? ctx.interaction!.options.getString("host", false) : ctx.args[2];
-      const portInput = fromSlash ? ctx.interaction!.options.getInteger("port", false) : ctx.args[3];
-      const port = portInput !== null && portInput !== undefined ? Number(portInput) : undefined;
+      const name = options ? options.getString("name", true) : ctx.args[1];
+      const host = (options ? options.getString("host") : ctx.args[2])?.trim().toLowerCase() || undefined;
+      const portRaw = options ? options.getInteger("port") : ctx.args[3];
+      const port = portRaw === null || portRaw === undefined ? undefined : Number(portRaw);
+      const rename = options ? options.getString("rename")?.trim() || undefined : ctx.args[4];
 
       if (!name) {
-        await respond(ctx, { embeds: [errorEmbed("Usage: server edit <name> [host] [port]")] });
+        await respond(ctx, usage("server edit <name> [host] [port] [new-name]"));
         return;
       }
 
-      const existing = await ctx.app.prisma.server.findFirst({ where: { guildId, name } });
-      if (!existing) {
-        await respond(ctx, { embeds: [errorEmbed(`Server **${name}** was not found.`)] });
+      const server = await findServerOrReply(ctx, guildId, name);
+      if (!server) return;
+
+      if (!host && port === undefined && !rename) {
+        await respond(ctx, info("Nothing to change", "Provide a new `host`, `port` or `rename` value."));
         return;
       }
+      if ((host && !isValidHost(host)) || (port !== undefined && !isValidPort(port))) {
+        await respond(ctx, failure("Enter a valid hostname/IP and a port between 1 and 65535.", "Invalid address"));
+        return;
+      }
+      if (rename && !SERVER_NAME_PATTERN.test(rename)) {
+        await respond(ctx, failure(NAME_RULES, "Invalid name"));
+        return;
+      }
+      if (rename && (await nameTaken(ctx, guildId, rename, server.id))) return;
 
-      await ctx.app.prisma.server.update({
-        where: { id: existing.id },
-        data: {
-          host: host || existing.host,
-          port: Number.isInteger(port) ? port : existing.port
-        }
+      const updated = await p.server.update({
+        where: { id: server.id },
+        data: { host: host ?? server.host, port: port ?? server.port, name: rename ?? server.name }
       });
 
-      await respond(ctx, {
-        embeds: [successEmbed("Server Updated", `Updated **${name}** successfully.`)]
-      });
+      ctx.app.statusMonitor.refresh(updated.id).catch(() => undefined);
+      await respond(ctx, serverDetailView(updated, "✅ Server updated"));
       return;
     }
 
     if (action === "delete") {
-      const name = fromSlash ? ctx.interaction!.options.getString("name", true) : ctx.args[1];
+      const name = options ? options.getString("name", true) : ctx.args[1];
       if (!name) {
-        await respond(ctx, { embeds: [errorEmbed("Usage: server delete <name>")] });
+        await respond(ctx, usage("server delete <name>"));
         return;
       }
 
-      const result = await ctx.app.prisma.server.deleteMany({ where: { guildId, name } });
-      if (result.count === 0) {
-        await respond(ctx, { embeds: [errorEmbed(`Server **${name}** was not found.`)] });
-        return;
-      }
+      const server = await findServerOrReply(ctx, guildId, name);
+      if (!server) return;
 
-      await respond(ctx, {
-        embeds: [successEmbed("Server Deleted", `Deleted **${name}**.`)]
-      });
+      await ctx.app.statusMonitor.removePanel(server);
+      await p.server.delete({ where: { id: server.id } });
+      await respond(ctx, success("Server deleted", `**${server.name}** and its status panel have been removed.`));
       return;
     }
 
-    const servers = await ctx.app.prisma.server.findMany({
-      where: { guildId },
-      orderBy: { createdAt: "desc" }
-    });
-
-    if (servers.length === 0) {
-      await respond(ctx, { embeds: [errorEmbed("No servers configured for this guild.")] });
+    if (action === "list") {
+      const servers = await p.server.findMany({ where: { guildId }, orderBy: { createdAt: "asc" } });
+      await respond(
+        ctx,
+        servers.length === 0
+          ? info("No servers yet", "Add one with `/server add <name> <host> [port]`.")
+          : serverListView(servers)
+      );
       return;
     }
 
-    const rows = servers
-      .map((server) => {
-        const statusState = server.statusEnabled ? "status:on" : "status:off";
-        const bridgeState = server.bridgeEnabled ? "bridge:on" : "bridge:off";
-        return `• **${server.name}** -> ${server.host}:${server.port} (${statusState}, ${bridgeState})`;
-      })
-      .join("\n");
-
-    await respond(ctx, {
-      embeds: [successEmbed("Configured Servers", rows)]
-    });
+    await respond(ctx, usage("server add <name> <host> [port]", "server edit <name> [host] [port]", "server delete <name>", "server list"));
   }
 } satisfies AppCommand;

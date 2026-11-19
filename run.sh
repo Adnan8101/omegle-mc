@@ -15,6 +15,9 @@ fi
 echo "Removing old build output..."
 rm -rf dist
 
+echo "Applying database migrations..."
+npx prisma migrate deploy
+
 echo "Building project..."
 npm run build
 
