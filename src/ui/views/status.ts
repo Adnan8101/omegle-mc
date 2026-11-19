@@ -1,6 +1,6 @@
 import { ContainerBuilder, escapeMarkdown } from "discord.js";
 import { EditionStatus } from "../../minecraft/ping";
-import { bullet, Card, timestamp, truncate } from "../components";
+import { Card, timestamp, truncate } from "../components";
 import { Colors, Emojis, Icons } from "../theme";
 
 export type StatusViewInput = {
@@ -14,78 +14,42 @@ export type StatusViewInput = {
 
 const DEFAULT_JAVA_PORT = 25565;
 
-function playerBar(online: number, max: number): string {
-  if (max <= 0) return "";
-  const slots = 10;
-  const filled = Math.min(slots, Math.round((online / max) * slots));
-  return `${"▰".repeat(filled)}${"▱".repeat(slots - filled)}`;
+/** The address exactly as a player types it into their client. */
+function address(status: EditionStatus): string {
+  if (status.edition === "bedrock") return `\`${status.host}\` port \`${status.port}\``;
+  return status.port === DEFAULT_JAVA_PORT ? `\`${status.host}\`` : `\`${status.host}:${status.port}\``;
 }
 
-function quote(text: string): string {
-  return text
-    .split("\n")
-    .slice(0, 3)
-    .map((line) => `> ${escapeMarkdown(truncate(line, 120))}`)
-    .join("\n");
-}
-
-/** How players type the address in their client. */
-export function formatAddress(edition: EditionStatus["edition"], host: string, port: number): string {
-  if (edition === "bedrock") return bullet(`**IP:** \`${host}\` · **Port:** \`${port}\``);
-  return bullet(port === DEFAULT_JAVA_PORT ? `**IP:** \`${host}\`` : `**IP:** \`${host}:${port}\``);
-}
-
-function editionBlock(status: EditionStatus): string {
-  const { ping } = status;
-  const title =
-    status.edition === "bedrock" ? `${Icons.bedrock} **Bedrock Edition**` : `${Icons.java} **Java Edition**`;
-
-  const state = ping.online
-    ? [`${Icons.online} Online`, `\`${ping.latencyMs} ms\``, ping.version ? escapeMarkdown(truncate(ping.version, 40)) : null]
-        .filter(Boolean)
-        .join(" · ")
-    : `${Icons.offline} Offline`;
-
-  return `${title} — ${state}\n${formatAddress(status.edition, status.host, status.port)}`;
+function connectLine(status: EditionStatus, showState: boolean): string {
+  const label = status.edition === "bedrock" ? "Bedrock" : "Java";
+  const state = showState && !status.ping.online ? " — offline" : "";
+  return `**${label}** ${address(status)}${state}`;
 }
 
 export function statusView(input: StatusViewInput): ContainerBuilder {
   const online = input.editions.filter((status) => status.ping.online);
-  const allOnline = online.length === input.editions.length;
   const lead = online[0]?.ping;
+  const partial = online.length > 0 && online.length < input.editions.length;
 
-  const footer = input.refreshSeconds
-    ? `Refreshes every ${input.refreshSeconds}s · Last checked ${timestamp(input.checkedAt)}`
-    : `Checked ${timestamp(input.checkedAt)}`;
-
-  let color: number = Colors.success;
-  let subtitle: string;
-
-  if (!lead?.online) {
-    color = Colors.danger;
-    subtitle = input.offlineSince
-      ? `${Icons.offline} **Offline** · Unreachable since ${timestamp(input.offlineSince)}`
-      : `${Icons.offline} **Offline** · The server is not responding`;
-  } else {
-    const players = `**${lead.playersOnline}** / ${lead.playersMax} players`;
-    if (allOnline) {
-      subtitle = `${Icons.online} **Online** · ${players}`;
-    } else {
-      color = Colors.warning;
-      subtitle = `${Icons.pending} **Partially online** · ${players}`;
-    }
-  }
-
-  const card = new Card(color)
-    .header(`${Emojis.minecraft} ${escapeMarkdown(input.name)}`, { subtitle, thumbnail: input.thumbnail })
-    .divider()
-    .text(input.editions.map(editionBlock).join("\n\n"));
+  let headline: string;
+  let color: number;
 
   if (lead?.online) {
-    const bar = playerBar(lead.playersOnline, lead.playersMax);
-    card.divider().fields([["Players", `\`${lead.playersOnline} / ${lead.playersMax}\`${bar ? `  ${bar}` : ""}`]]);
-    if (lead.motd) card.text(quote(lead.motd));
+    headline = `${Icons.online} **Online** · ${lead.playersOnline}/${lead.playersMax} players`;
+    color = partial ? Colors.warning : Colors.success;
+  } else {
+    headline = input.offlineSince
+      ? `${Icons.offline} **Offline** since ${timestamp(input.offlineSince)}`
+      : `${Icons.offline} **Offline**`;
+    color = Colors.danger;
   }
 
-  return card.spacer().footer(footer).build();
+  const motd = lead?.online && lead.motd ? escapeMarkdown(truncate(lead.motd.split("\n")[0], 80)) : null;
+
+  return new Card(color)
+    .header(`${Emojis.minecraft} ${escapeMarkdown(input.name)}`, { subtitle: headline, thumbnail: input.thumbnail })
+    .divider()
+    .text(...input.editions.map((status) => connectLine(status, input.editions.length > 1 && Boolean(lead?.online))))
+    .footer(motd, `Updated ${timestamp(input.checkedAt)}`)
+    .build();
 }

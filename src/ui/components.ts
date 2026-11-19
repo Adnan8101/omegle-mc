@@ -83,7 +83,7 @@ export class Card {
   fields(fields: Array<readonly [string, string] | false | null | undefined>): this {
     const lines = fields
       .filter((field): field is readonly [string, string] => Array.isArray(field))
-      .map(([label, value]) => `${Emojis.dot} **${label}:** ${value}`);
+      .map(([label, value]) => `**${label}:** ${value}`);
     return this.block(lines);
   }
 
