@@ -5,7 +5,7 @@ import {
   StringSelectMenuOptionBuilder
 } from "discord.js";
 import { Card } from "../components";
-import { Colors, Icons } from "../theme";
+import { Colors, Emojis, Icons } from "../theme";
 
 export const HELP_SELECT_ID = "help:category";
 
@@ -142,7 +142,7 @@ export function helpView(input: HelpViewInput): ContainerBuilder {
   if (!category) {
     const total = helpCategories.reduce((sum, entry) => sum + entry.commands.length, 0);
     const card = new Card(Colors.brand)
-      .header(`${name} · Help`, {
+      .header(`${Emojis.minecraft} ${name} · Help`, {
         subtitle: `Minecraft server tools for Discord: status panels, chat bridge and whitelist. **${total} commands** in ${helpCategories.length} categories.`,
         thumbnail: input.avatar
       })
@@ -175,7 +175,7 @@ export function helpView(input: HelpViewInput): ContainerBuilder {
 
   card.text(
     category.commands
-      .map((command) => `**\`${command.usage}\`**\n${command.description}\n-# Prefix: \`${command.prefixUsage ? input.prefix + command.prefixUsage : toPrefix(command.usage, input.prefix)}\``)
+      .map((command) => `${Emojis.dot} **\`${command.usage}\`**\n${command.description}\n-# Prefix: \`${command.prefixUsage ? input.prefix + command.prefixUsage : toPrefix(command.usage, input.prefix)}\``)
       .join("\n\n")
   );
 

@@ -7,7 +7,7 @@ import {
 import { WhitelistRequestStatus } from "@prisma/client";
 import { AppCommand, CommandContext } from "../types";
 import { Card, failure, info, success, usage, v2 } from "../ui/components";
-import { Colors, Icons } from "../ui/theme";
+import { Colors, Emojis } from "../ui/theme";
 import { getMember, requireGuild, requirePermission, respond } from "../utils/context";
 import { hasWhitelistAccess } from "../whitelist/service";
 import { panelView, pendingListView } from "../whitelist/views";
@@ -154,7 +154,7 @@ export default {
       await respond(
         ctx,
         new Card(Colors.minecraft)
-          .header(`${Icons.whitelist} Whitelist configuration`)
+          .header(`${Emojis.minecraft} Whitelist configuration`)
           .divider()
           .fields([
             ["Request panel", `<#${config.requestChannelId}>`],
@@ -208,7 +208,7 @@ export default {
             .text(
               "### 🛡️ Reviewer roles",
               roles.length
-                ? roles.map((role) => `• <@&${role.roleId}>`).join("\n")
+                ? roles.map((role) => `${Emojis.dot} <@&${role.roleId}>`).join("\n")
                 : "No reviewer roles yet — only Administrators and Manage Server members can review."
             )
             .build()

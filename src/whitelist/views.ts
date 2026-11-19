@@ -1,7 +1,7 @@
 import { ButtonBuilder, ButtonStyle, ContainerBuilder, escapeMarkdown, TextDisplayBuilder } from "discord.js";
 import { WhitelistEdition, WhitelistRequest, WhitelistRequestStatus } from "@prisma/client";
-import { Card, timestamp, truncate, V2Component } from "../ui/components";
-import { Colors, Icons } from "../ui/theme";
+import { bullet, Card, timestamp, truncate, V2Component } from "../ui/components";
+import { Colors, Emojis, Icons } from "../ui/theme";
 
 // Custom IDs are unchanged from earlier versions so already-posted panels keep working.
 export const WhitelistIds = {
@@ -27,16 +27,16 @@ const statusMeta: Record<WhitelistRequestStatus, { label: string; icon: string; 
 /** Public panel posted in the request channel. */
 export function panelView(guildName: string, guildIcon: string | null): ContainerBuilder {
   return new Card(Colors.minecraft)
-    .header(`${Icons.whitelist} Server Whitelist`, {
+    .header(`${Emojis.minecraft} Server Whitelist`, {
       subtitle: `Request access to the **${escapeMarkdown(guildName)}** Minecraft server.`,
       thumbnail: guildIcon
     })
     .divider()
     .text(
       "### How it works",
-      "**1.** Choose your edition below.",
-      "**2.** Enter your exact in-game username.",
-      "**3.** A staff member reviews your request — we'll DM you the result."
+      bullet("Choose your edition below."),
+      bullet("Enter your exact in-game username."),
+      bullet("A staff member reviews your request — we'll DM you the result.")
     )
     .divider()
     .actions(
@@ -74,13 +74,13 @@ export function reviewCardView(input: ReviewCardInput): V2Component[] {
   const isPending = request.status === WhitelistRequestStatus.PENDING;
 
   const card = new Card(meta.color)
-    .header(`${Icons.whitelist} Whitelist Request`, { subtitle: `Submitted ${timestamp(request.createdAt)}` })
+    .header(`${Emojis.minecraft} Whitelist Request`, { subtitle: `Submitted ${timestamp(request.createdAt)}` })
     .divider()
     .block(
       [
-        `**Applicant:** <@${request.userId}>${input.applicantTag ? ` · \`${escapeMarkdown(input.applicantTag)}\`` : ""}`,
-        `**Username:** \`${request.username}\``,
-        `**Edition:** ${formatEdition(request.edition)}`
+        bullet(`**Applicant:** <@${request.userId}>${input.applicantTag ? ` · \`${escapeMarkdown(input.applicantTag)}\`` : ""}`),
+        bullet(`**Username:** \`${request.username}\``),
+        bullet(`**Edition:** ${formatEdition(request.edition)}`)
       ],
       input.applicantAvatar
     )
@@ -205,7 +205,7 @@ export function pendingListView(
         const link = request.reviewMessageId
           ? ` · [Open](https://discord.com/channels/${guildId}/${staffChannelId}/${request.reviewMessageId})`
           : "";
-        return `${formatEdition(request.edition).split(" ")[0]} \`${request.username}\` — <@${request.userId}> · ${timestamp(request.createdAt)}${link}`;
+        return `${Emojis.dot} ${formatEdition(request.edition).split(" ")[0]} \`${request.username}\` — <@${request.userId}> · ${timestamp(request.createdAt)}${link}`;
       })
     );
   }

@@ -1,7 +1,7 @@
 import { ContainerBuilder, escapeMarkdown } from "discord.js";
 import { EditionStatus } from "../../minecraft/ping";
-import { Card, timestamp, truncate } from "../components";
-import { Colors, Icons } from "../theme";
+import { bullet, Card, timestamp, truncate } from "../components";
+import { Colors, Emojis, Icons } from "../theme";
 
 export type StatusViewInput = {
   name: string;
@@ -31,8 +31,8 @@ function quote(text: string): string {
 
 /** How players type the address in their client. */
 export function formatAddress(edition: EditionStatus["edition"], host: string, port: number): string {
-  if (edition === "bedrock") return `**IP:** \`${host}\` · **Port:** \`${port}\``;
-  return port === DEFAULT_JAVA_PORT ? `**IP:** \`${host}\`` : `**IP:** \`${host}:${port}\``;
+  if (edition === "bedrock") return bullet(`**IP:** \`${host}\` · **Port:** \`${port}\``);
+  return bullet(port === DEFAULT_JAVA_PORT ? `**IP:** \`${host}\`` : `**IP:** \`${host}:${port}\``);
 }
 
 function editionBlock(status: EditionStatus): string {
@@ -59,28 +59,25 @@ export function statusView(input: StatusViewInput): ContainerBuilder {
     : `Checked ${timestamp(input.checkedAt)}`;
 
   let color: number = Colors.success;
-  let icon: string = Icons.online;
   let subtitle: string;
 
   if (!lead?.online) {
     color = Colors.danger;
-    icon = Icons.offline;
     subtitle = input.offlineSince
-      ? `**Offline** · Unreachable since ${timestamp(input.offlineSince)}`
-      : "**Offline** · The server is not responding";
+      ? `${Icons.offline} **Offline** · Unreachable since ${timestamp(input.offlineSince)}`
+      : `${Icons.offline} **Offline** · The server is not responding`;
   } else {
     const players = `**${lead.playersOnline}** / ${lead.playersMax} players`;
     if (allOnline) {
-      subtitle = `**Online** · ${players}`;
+      subtitle = `${Icons.online} **Online** · ${players}`;
     } else {
       color = Colors.warning;
-      icon = Icons.pending;
-      subtitle = `**Partially online** · ${players}`;
+      subtitle = `${Icons.pending} **Partially online** · ${players}`;
     }
   }
 
   const card = new Card(color)
-    .header(`${icon} ${escapeMarkdown(input.name)}`, { subtitle, thumbnail: input.thumbnail })
+    .header(`${Emojis.minecraft} ${escapeMarkdown(input.name)}`, { subtitle, thumbnail: input.thumbnail })
     .divider()
     .text(input.editions.map(editionBlock).join("\n\n"));
 

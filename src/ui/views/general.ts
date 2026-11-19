@@ -1,7 +1,7 @@
 import { ContainerBuilder, escapeMarkdown } from "discord.js";
 import { Server } from "@prisma/client";
 import { Card, timestamp } from "../components";
-import { Colors, Icons } from "../theme";
+import { Colors, Emojis, Icons } from "../theme";
 
 /** One-line summary of a server's Java and Bedrock addresses. */
 export function addressSummary(server: Server): string {
@@ -15,7 +15,7 @@ function badge(enabled: boolean, channelId: string | null): string {
 }
 
 export function serverListView(servers: Server[]): ContainerBuilder {
-  const card = new Card(Colors.brand).header(`${Icons.server} Servers`, {
+  const card = new Card(Colors.brand).header(`${Emojis.minecraft} Servers`, {
     subtitle: `${servers.length} server${servers.length === 1 ? "" : "s"} configured`
   });
 
@@ -23,7 +23,7 @@ export function serverListView(servers: Server[]): ContainerBuilder {
     card
       .divider()
       .text(
-        `**${escapeMarkdown(server.name)}**`,
+        `${Emojis.dot} **${escapeMarkdown(server.name)}**`,
         addressSummary(server),
         `-# Status ${badge(server.statusEnabled, server.statusChannelId)}  ·  Bridge ${badge(server.bridgeEnabled, server.bridgeChannelId)}`
       );
@@ -35,7 +35,7 @@ export function serverListView(servers: Server[]): ContainerBuilder {
 
 export function serverDetailView(server: Server, title: string): ContainerBuilder {
   return new Card(Colors.brand)
-    .header(`${Icons.server} ${escapeMarkdown(server.name)}`, { subtitle: title })
+    .header(`${Emojis.minecraft} ${escapeMarkdown(server.name)}`, { subtitle: title })
     .divider()
     .fields([
       ["Java", `\`${server.host}:${server.port}\``],

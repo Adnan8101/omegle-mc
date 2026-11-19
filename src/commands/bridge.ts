@@ -2,7 +2,7 @@ import { InteractionContextType, PermissionFlagsBits, SlashCommandBuilder } from
 import { env } from "../config/env";
 import { AppCommand, CommandContext } from "../types";
 import { Card, failure, success, usage } from "../ui/components";
-import { Colors, Icons } from "../ui/theme";
+import { Colors, Emojis, Icons } from "../ui/theme";
 import { requireGuild, requirePermission, respond } from "../utils/context";
 import { findServerOrReply, MESSAGE_CHANNEL_TYPES, parseChannelMention, serverAutocomplete } from "./shared";
 
@@ -57,7 +57,7 @@ export default {
       card.text(
         "**Bridged channels**",
         ...(bridged.length
-          ? bridged.map((server) => `<#${server.bridgeChannelId}> ↔ **${server.name}**`)
+          ? bridged.map((server) => `${Emojis.dot} <#${server.bridgeChannelId}> ↔ **${server.name}**`)
           : ["-# None yet — use `/bridge enable`."])
       );
 

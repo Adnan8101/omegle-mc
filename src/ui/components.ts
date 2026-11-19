@@ -12,7 +12,7 @@ import {
   TextDisplayBuilder,
   ThumbnailBuilder
 } from "discord.js";
-import { Colors, Icons } from "./theme";
+import { Colors, Emojis, Icons } from "./theme";
 
 /** Any top-level component allowed in a Components V2 message. */
 export type V2Component =
@@ -27,6 +27,11 @@ const TEXT_LIMIT = 4000;
 
 function joinLines(lines: Line[]): string {
   return lines.filter((line): line is string => typeof line === "string" && line.length > 0).join("\n");
+}
+
+/** Prefixes a line with the branded bullet. */
+export function bullet(text: string): string {
+  return `${Emojis.dot} ${text}`;
 }
 
 export function truncate(value: string, max: number): string {
@@ -78,7 +83,7 @@ export class Card {
   fields(fields: Array<readonly [string, string] | false | null | undefined>): this {
     const lines = fields
       .filter((field): field is readonly [string, string] => Array.isArray(field))
-      .map(([label, value]) => `**${label}:** ${value}`);
+      .map(([label, value]) => `${Emojis.dot} **${label}:** ${value}`);
     return this.block(lines);
   }
 
