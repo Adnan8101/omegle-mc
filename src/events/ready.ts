@@ -1,5 +1,6 @@
 import { ActivityType, Client, Events } from "discord.js";
 import { env } from "../config/env";
+import { slashCommandData } from "../commands";
 import { AppContainer } from "../types";
 import { logger } from "../utils/logger";
 
@@ -11,13 +12,10 @@ export function registerReadyEvent(app: AppContainer): void {
       activities: [{ name: "Minecraft servers", type: ActivityType.Watching }]
     });
 
-    const slashCommands = [...new Set(app.commands.values())]
-      .filter((command) => command.slash)
-      .map((command) => command.slash!.toJSON());
-
     try {
-      await client.application.commands.set(slashCommands);
-      logger.info({ count: slashCommands.length }, "Slash commands registered");
+      // Global registration keeps commands in sync on every deploy/restart.
+      const registered = await client.application.commands.set(slashCommandData());
+      logger.info({ count: registered.size }, "Slash commands registered globally");
     } catch (error) {
       logger.error({ error }, "Failed to register slash commands");
     }

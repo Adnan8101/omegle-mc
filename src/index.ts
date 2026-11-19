@@ -1,14 +1,7 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import { prisma } from "./config/prisma";
 import { env } from "./config/env";
-import serverCommand from "./commands/server";
-import statusCommand from "./commands/status";
-import bridgeCommand from "./commands/bridge";
-import utilityCommand from "./commands/utility";
-import helpCommand from "./commands/help";
-import whitelistCommand from "./commands/whitelist";
-import verifyCommand from "./commands/verify";
-import rejectCommand from "./commands/reject";
+import { commandList } from "./commands";
 import { registerReadyEvent } from "./events/ready";
 import { registerInteractionCreateEvent } from "./events/interactionCreate";
 import { registerMessageCreateEvent } from "./events/messageCreate";
@@ -19,20 +12,14 @@ import { MinecraftStatusMonitor } from "./minecraft/status";
 import { AppCommand, AppContainer } from "./types";
 import { logger } from "./utils/logger";
 
+if (!env.DATABASE_URL) {
+  logger.fatal("Missing required environment variable: DATABASE_URL");
+  process.exit(1);
+}
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
-
-const commandList: AppCommand[] = [
-  serverCommand,
-  statusCommand,
-  bridgeCommand,
-  utilityCommand,
-  helpCommand,
-  whitelistCommand,
-  verifyCommand,
-  rejectCommand
-];
 
 const commands = new Map<string, AppCommand>();
 for (const command of commandList) {

@@ -12,14 +12,27 @@ if ! command -v pm2 >/dev/null 2>&1; then
   exit 1
 fi
 
+if [ ! -f .env ]; then
+  echo ".env is missing — copy .env.example to .env and fill it in"
+  exit 1
+fi
+
+echo "Installing dependencies..."
+# Dev dependencies are required: prisma and typescript are used to build.
+npm ci --include=dev --no-audit --no-fund
+
+echo "Applying database migrations..."
+# --no-install: always use the project's pinned Prisma, never download another version.
+npx --no-install prisma migrate deploy
+
 echo "Removing old build output..."
 rm -rf dist
 
-echo "Applying database migrations..."
-npx prisma migrate deploy
-
 echo "Building project..."
 npm run build
+
+echo "Deploying slash commands globally..."
+npm run deploy:prod
 
 if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
   echo "Restarting existing PM2 process: $APP_NAME"

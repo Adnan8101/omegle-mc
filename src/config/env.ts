@@ -33,7 +33,9 @@ const auth = optional("MC_BOT_AUTH", "offline").toLowerCase();
 
 export const env = {
   DISCORD_TOKEN: required("DISCORD_TOKEN"),
-  DATABASE_URL: required("DATABASE_URL"),
+  CLIENT_ID: optional("CLIENT_ID", ""),
+  /** Checked at bot startup (not at import) so `npm run deploy` works without a database. */
+  DATABASE_URL: optional("DATABASE_URL", ""),
   PREFIX: optional("PREFIX", "!"),
 
   /** How often status panels refresh. Clamped to 10s–1h to stay clear of rate limits. */
